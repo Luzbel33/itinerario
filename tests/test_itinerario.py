@@ -149,6 +149,7 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.fail_geocodes = False
         self.fail_social = False
         self.empty_initial_posts = False
+        self.linkedin_initial_posts = False
         self.report_response = intent()
         fake_map = Image.new("RGB", (1000, 650), color="#eef6f2")
         stream = io.BytesIO()
@@ -173,6 +174,12 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     if (self.empty_initial_posts and "instagram.com" in filters["allowed_domains"]
                             and "primer_relevamiento" not in json.loads(payload["input"])):
                         result = response("No encontré publicaciones citables en la búsqueda inicial.")
+                    elif (self.linkedin_initial_posts and "linkedin.com" in filters["allowed_domains"]
+                          and "primer_relevamiento" not in json.loads(payload["input"])):
+                        result = response("Encontré una página comercial de LinkedIn.", [
+                            {"type": "url_citation", "title": "Página de la organización",
+                             "url": "https://www.linkedin.com/company/ficticia/"},
+                        ])
                     else:
                         result = response("Fecha publicada en la red", [
                             {"type": "url_citation", "title": "Publicación del evento",
@@ -324,6 +331,14 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(targeted[0]["max_tool_calls"], 2)
         self.assertTrue(any(source.channel == "social" for source in sources))
         self.assertFalse(any(limit.startswith("Publicaciones en redes ·") for limit in result.limitations))
+
+    async def test_requested_instagram_pass_is_not_satisfied_by_other_networks(self):
+        self.linkedin_initial_posts = True
+        service = Research(self.client, "openai-fixture", self.settings.model)
+        selected = intent().model_copy(update={"depth": Depth.DEEP, "objective": "Priorizá Instagram en Salta."})
+        await service.report(selected, STAMP[:10])
+        retry = next(call for call in self.openai_calls if "primer_relevamiento" in json.loads(call["input"]))
+        self.assertEqual(retry["tools"][0]["filters"]["allowed_domains"], ["instagram.com"])
 
     async def test_guides_and_guest_onboarding_do_not_call_openai(self):
         self.bot.username = "FixtureBot"

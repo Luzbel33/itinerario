@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -21,6 +22,10 @@ POST_DOMAINS = (
 )
 THREAD_DOMAINS = (
     "reddit.com", "x.com", "twitter.com", "facebook.com", "threads.com", "threads.net", "youtube.com", "bsky.app",
+)
+INSTAGRAM_FIRST = re.compile(
+    r"\b(?:prioriz\w*\s+(?:especialmente\s+)?instagram|instagram\s+(?:como\s+)?(?:prioridad|fuente principal))\b",
+    re.IGNORECASE,
 )
 
 SYSTEM = """
@@ -151,6 +156,14 @@ def is_social(url: str) -> bool:
     return any(host == domain or host.endswith(f".{domain}") for domain in SOCIAL_DOMAINS)
 
 
+def is_instagram_publication(url: str) -> bool:
+    target = urlsplit(url)
+    host = target.hostname or ""
+    return (host == "instagram.com" or host.endswith(".instagram.com")) and target.path.startswith(
+        ("/p/", "/reel/", "/reels/", "/tv/", "/stories/")
+    )
+
+
 def extract_sources(responses: Sequence[dict], accessed: str) -> list[Source]:
     candidates = {}
     for response in responses:
@@ -275,6 +288,7 @@ class Research:
                  "país": intent.country_code, "máximo_establecimientos": budget.places, "nivel": intent.depth}
         post_instructions = POST_INSTRUCTIONS if budget.thread_calls else SOCIAL_INSTRUCTIONS
         post_domains = POST_DOMAINS if budget.thread_calls else SOCIAL_DOMAINS
+        instagram_first = bool(INSTAGRAM_FIRST.search(intent.objective))
         passes = {
             "Web general": self.call(
                 SEARCH_INSTRUCTIONS, query, tokens=budget.research_tokens, searches=budget.web_calls),
@@ -307,23 +321,30 @@ class Research:
         if not evidence:
             raise ResearchError("La búsqueda no se pudo completar.")
         initial_posts = results[1]
-        if budget.targeted_calls and (
-            isinstance(initial_posts, BaseException) or not extract_sources([initial_posts], accessed)
-        ):
+        post_sources = [] if isinstance(initial_posts, BaseException) else extract_sources([initial_posts], accessed)
+        missing_posts = not post_sources or (
+            instagram_first and not any(is_instagram_publication(source.url) for source in post_sources))
+        if budget.targeted_calls and missing_posts:
+            retry_channel = "Instagram por nombre de entidad" if instagram_first else "Búsqueda por nombre de entidad"
             try:
                 targeted = await self.call(
                     TARGETED_INSTRUCTIONS,
                     {**query, "primer_relevamiento": [output_text(result) for result in evidence]},
-                    tokens=4500, searches=budget.targeted_calls, domains=POST_DOMAINS,
+                    tokens=4500, searches=budget.targeted_calls,
+                    domains=("instagram.com",) if instagram_first else POST_DOMAINS,
                 )
-                if extract_sources([targeted], accessed):
+                targeted_sources = extract_sources([targeted], accessed)
+                if targeted_sources:
                     evidence.append(targeted)
+                retrieved_posts = targeted_sources and (
+                    not instagram_first or any(is_instagram_publication(source.url) for source in targeted_sources))
+                if retrieved_posts:
                     coverage = [note for note in coverage if not note.startswith("Publicaciones en redes ·")]
                 else:
-                    coverage.append("Búsqueda por nombre de entidad · sin publicaciones citables.")
+                    coverage.append(f"{retry_channel} · sin publicaciones citables.")
             except (ProviderError, ResearchError) as error:
                 LOG.warning("No se completó la búsqueda por entidad: %s", error)
-                coverage.append("Búsqueda por nombre de entidad · consulta no disponible.")
+                coverage.append(f"{retry_channel} · consulta no disponible.")
         if budget.contrast_calls:
             try:
                 evidence.append(await self.call(
