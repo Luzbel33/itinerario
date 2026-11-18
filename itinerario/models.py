@@ -62,6 +62,9 @@ class Intent(Model):
     map_kind: Literal["none", "pins", "route"]
     area: Short
     country_code: Short
+    job_search: bool
+    instagram: Literal["priorizar", "opcional", "omitir"]
+    instagram_query: Short
     origin: Short
     finish: Short
     return_to_origin: bool

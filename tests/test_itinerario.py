@@ -32,6 +32,7 @@ def intent() -> Intent:
     return Intent(
         action="report", answer="", objective="Investigá espacios con actividad cultural",
         depth=Depth.STANDARD, delivery="pdf", map_kind="route", area="CABA", country_code="ar",
+        job_search=False, instagram="opcional", instagram_query="espacio cultural Palermo",
         origin="-34.591702,-58.447601", finish="", return_to_origin=True,
         transport="drive", sector_size=3, sector_count=0, sort_by="time",
     )

@@ -43,9 +43,11 @@ HELP = (
     "Si volvés con una duda, podés repreguntarme en este chat.\n\n"
     "<b>Dónde busca</b>\n"
     "Sitios oficiales, medios, directorios, agendas y publicaciones públicas que aparecen en buscadores. "
-    "Según el tema, puede incluir Instagram, Facebook, X, TikTok, YouTube y otros. "
+    "Para empleo, busca avisos en LinkedIn Jobs, Computrabajo donde opera y páginas de empleadores. "
     "El informe cita lo que encontró y marca qué datos quedan por confirmar. "
-    "En redes, la cobertura se limita a contenido público accesible en la búsqueda.\n\n"
+    "Para investigar Instagram, podés incluir cuentas públicas o enlaces concretos. En esta instalación, "
+    "si hay crédito de Apify, puedo consultar posts, comentarios e historias activas y leer texto visible "
+    "en flyers y fotogramas de video.\n\n"
     "<b>Cuánto querés investigar</b>\n"
     "Elegí la profundidad con /modos. Podés combinarla con el formato que te resulte cómodo: "
     "resumen en el chat, PDF o una guía de varias páginas.\n\n"
@@ -74,6 +76,9 @@ EXAMPLES = (
     "<b>Conseguir fechas o eventos</b>\n"
     "<code>Soy DJ de techno en Salta. Buscá convocatorias abiertas, eventos y espacios afines. "
     "Separá los avisos confirmados de los lugares a los que podría ofrecerme.</code>\n\n"
+    "<b>Encontrar trabajo</b>\n"
+    "<code>/profundo Buscá vacantes vigentes de ventas en Salta Capital. Revisá LinkedIn, Computrabajo "
+    "e Instagram. Incluí el enlace para postularme y la evidencia de vigencia.</code>\n\n"
     "<b>Retomar un PDF</b>\n"
     "<code>Del último informe, ¿cuáles son las tres opciones más convenientes y qué tendría que confirmar antes de ir?</code>"
 )
@@ -137,7 +142,8 @@ def brief_report(snapshot: Snapshot) -> str:
 
 
 async def read_attachment(data: bytes) -> str:
-    credentials = {"OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "GEOAPIFY_API_KEY"}
+    credentials = {"OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "GEOAPIFY_API_KEY", "APIFY_TOKEN",
+                   "TELEGRAM_WEBHOOK_SECRET", "DATABASE_URL"}
     environment = {key: value for key, value in os.environ.items() if key.upper() not in credentials}
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "itinerario.read_pdf", stdin=asyncio.subprocess.PIPE,
@@ -160,7 +166,8 @@ class Bot:
         self.settings = settings
         self.store = store
         self.telegram = Telegram(client, settings.telegram_token)
-        self.research = Research(client, settings.openai_key, settings.model)
+        self.research = Research(client, settings.openai_key, settings.model, apify_token=settings.apify_token,
+                                 reserve_free_credit=store.reserve_apify_credit if settings.apify_free_verified else None)
         self.maps = Geoapify(client, settings.geoapify_key)
         self.wakeup = asyncio.Event()
         self.delivery_wakeup = asyncio.Event()
@@ -173,6 +180,8 @@ class Bot:
         self.username = info["username"]
         LOG.info("Conectado como @%s", self.username)
         LOG.info("telegram_public_access=%s", "enabled" if self.settings.public_access else "disabled")
+        LOG.info("apify_cuenta_gratuita_verificada=%s cupo_personal=%d cupo_global=%d",
+                 self.settings.apify_free_verified, self.settings.reports, self.settings.global_reports)
         try:
             await self.telegram.call("setMyCommands", {
                 "commands": [{"command": command, "description": description} for command, description in MENU.items()]
@@ -323,6 +332,8 @@ class Bot:
             self.answer(job, (
                 f"El bot guarda tus mensajes e informes hasta {days} días para que puedas retomarlos. "
                 "OpenAI procesa la consulta y Geoapify procesa las direcciones necesarias para el mapa. "
+                "Para consultar Instagram se pueden enviar a Apify búsquedas públicas, cuentas y enlaces. "
+                "OpenAI puede interpretar imágenes y fotogramas públicos. "
                 "Telegram conserva los mensajes y archivos según sus propias políticas. "
                 "Para borrar del bot tu historial y tus informes, usá /borrar confirmar."
             ))
@@ -399,6 +410,7 @@ class Bot:
         own_report = DOCUMENT_NAME.fullmatch(reply_document.get("file_name") or "")
         row = self.store.select_report(owner, own_report.group(1).lower()) if own_report else self.store.report(owner)
         previous_report = Snapshot.model_validate_json(row["data"]) if row else None
+        user_text = text
         if document:
             try:
                 attachment_text = await read_attachment(await self.telegram.attachment(document))
@@ -429,7 +441,7 @@ class Bot:
                 await self.telegram.send(owner, message)
             except ProviderError as error:
                 LOG.warning("%s", error)
-        report, sources = await self.research.report(intent, stamp[:10])
+        report, sources = await self.research.report(intent, stamp[:10], user_text=user_text)
         geography = await self.maps.plan(intent, report)
         snapshot = Snapshot(created=stamp, objective=intent.objective, report=report, depth=intent.depth,
                             sources=sources, geography=geography)

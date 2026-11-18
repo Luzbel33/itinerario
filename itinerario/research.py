@@ -4,11 +4,13 @@ import logging
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from functools import partial
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
 
+from . import instagram, visual
 from .models import BUDGETS, Depth, Intent, Model, Report, Source
 from .providers import ProviderError, public_url, request
 
@@ -26,6 +28,14 @@ THREAD_DOMAINS = (
 INSTAGRAM_FIRST = re.compile(
     r"\b(?:prioriz\w*\s+(?:especialmente\s+)?instagram|instagram\s+(?:como\s+)?(?:prioridad|fuente principal))\b",
     re.IGNORECASE,
+)
+COMPUTRABAJO_COUNTRIES = frozenset("ar bo cl co cr cu do ec gt hn mx ni pa pe pr py sv uy ve".split())
+IG_HANDLE = re.compile(r"[\w.]{1,30}", re.ASCII)
+IG_USER_LINK = re.compile(r"(?<![\w./@-])(?:https?://)?(?:www\.|m\.)?instagram\.com/[\w./-]+", re.I)
+IG_MENTION = re.compile(r"(?<![\w./@+-])@([\w.]{1,30})(?![\w.])", re.ASCII)
+IG_RESERVED = frozenset(
+    "about accounts ads api challenge developer developers direct directory emails embed explore "
+    "graphql help legal oauth p press privacy reel reels share static stories tv web".split()
 )
 DELIVERY_BOILERPLATE = re.compile(
     r"^\s*(?:(?:pdf|archivo adjunto)\s*[:.]\s*)?"
@@ -58,6 +68,14 @@ Si pide minimizar kilómetros usá distance; por defecto time. Para pins y route
 precisa o direcciones completas. Usá pins cuando el PDF compara opciones físicas en una zona y las
 direcciones o distancias aportarían una decisión, salvo que el usuario prefiera prescindir del mapa.
 country_code es ISO alpha-2 en minúscula, o vacío cuando sea indeterminado.
+job_search es true para buscar vacantes, llamados para contratar personal u oportunidades laborales
+concretas de la persona. Para otros objetivos es false. En instagram usá priorizar cuando se piden
+publicaciones, historias, flyers o comentarios de Instagram o se pide investigar allí. Usá omitir
+si la persona excluye Instagram, acota las fuentes a otras plataformas, o el tema no se beneficia
+de fuentes de Instagram. En los demás casos usá opcional. En instagram_query devolvé una frase breve
+en el idioma del lugar para buscar cuentas institucionales: nombre de organización y localidad si la
+persona dio una, o categoría de cuenta y zona (por ejemplo «empleos Salta» para vacantes en Salta).
+No incluyas datos del usuario, nombres de particulares ni nombres inventados. Dejá vacío si no aplica.
 Elegí rápido para un pedido sencillo, detallado para un informe normal y profundo si el usuario pide
 mayor análisis o contraste. Extenso se reserva para profundidad_explícita=extenso. En delivery
 elegí telegram si pide el resultado en el chat o para una consulta breve sin mapa. Elegí pdf si pide
@@ -70,7 +88,9 @@ Investigá con web_search. Usá sitios oficiales y fuentes primarias, medios loc
 publicadas, registros públicos y publicaciones accesibles. Citá junto a cada dato importante. Distingí
 fecha de publicación, fecha del hecho y vigencia efectiva. Buscá la fuente original de cifras, anuncios,
 direcciones, contactos y horarios. Ubicá cada búsqueda en la ciudad, idioma y mercado del pedido.
-Para empleo o contratación, mirá bolsas de trabajo y convocatorias locales. Para compra o venta, mirá
+Para empleo o contratación, mirá LinkedIn Jobs, Computrabajo en mercados donde opera, portales del
+empleador y convocatorias locales. Registrá ubicación, fecha, disponibilidad para postularse y enlace
+al aviso específico. Una página de categorías no demuestra una vacante abierta. Para compra o venta, mirá
 clasificados, catálogos y mercados pertinentes. Para investigación, buscá medios de la zona, incluidos
 medios pequeños si aportan evidencia, y fuentes originales.
 Si busca comprar, exigí una oferta del artículo concreto. Si busca vender, buscá demanda o un canal que
@@ -104,6 +124,19 @@ Instagram y Facebook con expresiones del lugar. Para contratación profesional p
 si encaja con el pedido. Dejá constancia solo de las plataformas que efectivamente pudiste consultar.
 """
 
+IG_DISCOVERY = """
+Localizá cuentas públicas institucionales, comercios u organizadores concretos del rubro y zona,
+incluidos empleadores y bolsas de empleo locales cuando se buscan vacantes. Citá como fuente la URL
+directa de los perfiles o publicaciones originales de Instagram; el sistema los consulta después.
+Buscá por nombre de entidad y localidad. No adivines usuarios ni cites URLs de búsqueda.
+"""
+
+JOB_INSTRUCTIONS = SEARCH_INSTRUCTIONS + """
+Dedicá esta búsqueda al portal indicado. Buscá títulos equivalentes en el idioma local y abrí fichas
+individuales del puesto. Comprobá ciudad, fecha y si sigue aceptando postulaciones. Si solo ves un
+listado genérico, un extracto o una oferta cerrada, indicá el límite. Citá el aviso original.
+"""
+
 TARGETED_INSTRUCTIONS = POST_INSTRUCTIONS + """
 El pase general ya encontró nombres y fuentes útiles. Tomá hasta tres entidades relevantes del
 relevamiento y buscá sus cuentas públicas y publicaciones concretas por nombre exacto y localidad.
@@ -123,6 +156,10 @@ Convertí la investigación en un informe accionable. Solamente usá IDs de la l
 El campo evidencia_recuperada contiene resultados de la búsqueda web realizada por Rumbo para este
 pedido. Describí la verificación según lo que dice cada fuente y evitá afirmar que esos resultados los
 aportó la persona. Los límites de cobertura del proveedor se muestran aparte en el informe.
+instagram_directo contiene material recuperado para este pedido con su ID de fuente. Citá el registro
+pertinente al usar el texto de un post, un comentario, un flyer o fotogramas de video. Una historia
+puede desaparecer; conservá su cuenta y fecha. Una reacción sin oferta ni llamado no es una vacante.
+Si una fuente solo es un extracto de búsqueda o una miniatura, describí únicamente lo observado.
 Tu salida aporta el contenido del informe. El sistema se encarga de producir y entregar el archivo.
 No agregues texto sobre adjuntos, exportación, impresión ni sobre cómo guardar este informe como PDF.
 Toda afirmación factual en findings usa kind=documentado y una fuente específica, o usa pendiente. Usá
@@ -171,6 +208,57 @@ def is_instagram_publication(url: str) -> bool:
     return (host == "instagram.com" or host.endswith(".instagram.com")) and target.path.startswith(
         ("/p/", "/reel/", "/reels/", "/tv/", "/stories/")
     )
+
+
+def instagram_targets(user_text: str, cited: Sequence[Source], *, allow_mentions: bool) -> tuple[list[str], list[str]]:
+    handles = {}
+    posts = {}
+
+    def add_handle(candidate: str):
+        name = candidate.lower()
+        if (IG_HANDLE.fullmatch(name) and name not in IG_RESERVED
+                and not name.startswith(".") and not name.endswith(".") and ".." not in name):
+            handles[name] = None
+
+    if allow_mentions:
+        for match in IG_MENTION.finditer(user_text):
+            add_handle(match[1].rstrip("."))
+    urls = [match[0] for match in IG_USER_LINK.finditer(user_text)]
+    urls.extend(source.url for source in cited)
+    for url in urls:
+        parsed = urlsplit(url if "://" in url else f"https://{url}")
+        if parsed.netloc.lower() not in {"instagram.com", "www.instagram.com", "m.instagram.com"}:
+            continue
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 1:
+            add_handle(parts[0])
+            continue
+        if parts[0] == "stories" and parts[1] != "highlights":
+            add_handle(parts[1])
+        if len(parts) >= 3 and parts[1] in {"p", "reel", "reels", "tv"}:
+            add_handle(parts[0])
+            parts = parts[1:]
+        if parts[0] in {"p", "reel", "reels", "tv"} and re.fullmatch(r"[A-Za-z0-9_-]{3,40}", parts[1]):
+            kind = "reel" if parts[0] == "reels" else parts[0]
+            posts[f"https://www.instagram.com/{kind}/{parts[1]}/"] = None
+    return list(handles), list(posts)
+
+
+def attach_instagram_sources(sources: list[Source], records: list[dict], accessed: str) -> list[dict]:
+    by_url = {source.url: source for source in sources}
+    evidence = []
+    for record in records:
+        url = record["url"]
+        if not public_url(url) or urlsplit(url).hostname not in {"instagram.com", "www.instagram.com"}:
+            continue
+        source = by_url.get(url)
+        if source is None:
+            source = Source(id=len(sources) + 1, url=url, title=record["title"][:250], accessed=accessed,
+                            channel="social")
+            sources.append(source)
+            by_url[url] = source
+        evidence.append({"id": source.id, "tipo_y_origen": record["title"], "contenido": record["text"]})
+    return evidence
 
 
 def extract_sources(responses: Sequence[dict], accessed: str) -> list[Source]:
@@ -228,10 +316,13 @@ def clean_report(report: Report, sources: Sequence[Source], depth: Depth) -> Rep
 
 
 class Research:
-    def __init__(self, client: httpx.AsyncClient, key: str, model: str):
+    def __init__(self, client: httpx.AsyncClient, key: str, model: str, apify_token: str = "",
+                 *, reserve_free_credit=None):
         self.client = client
         self.key = key
         self.model = model
+        self.apify_token = apify_token
+        self.reserve_free_credit = reserve_free_credit
 
     async def call(self, instructions: str, data: dict, *, tokens: int, searches: int = 0,
                    domains: Sequence[str] = (),
@@ -293,29 +384,48 @@ class Research:
             intent.answer = "¿Desde dónde querés salir? Con una dirección o un punto de referencia me alcanza."
         return intent
 
-    async def report(self, intent: Intent, accessed: str) -> tuple[Report, list[Source]]:
+    async def report(self, intent: Intent, accessed: str, *, user_text: str = "") -> tuple[Report, list[Source]]:
         budget = BUDGETS[intent.depth]
         query = {"objetivo": intent.objective, "zona": intent.area, "fecha_consulta": accessed,
                  "país": intent.country_code, "máximo_establecimientos": budget.places, "nivel": intent.depth}
         post_instructions = POST_INSTRUCTIONS if budget.thread_calls else SOCIAL_INSTRUCTIONS
         post_domains = POST_DOMAINS if budget.thread_calls else SOCIAL_DOMAINS
-        instagram_first = bool(INSTAGRAM_FIRST.search(intent.objective))
+        instagram_first = intent.instagram == "priorizar" or (
+            intent.instagram != "omitir" and bool(INSTAGRAM_FIRST.search(intent.objective)))
+        direct_ig = bool(self.apify_token and intent.instagram != "omitir" and (
+            instagram_first or intent.depth in {Depth.DEEP, Depth.EXTENSIVE} or IG_USER_LINK.search(user_text)))
+        if direct_ig:
+            post_instructions += IG_DISCOVERY
+            if instagram_first:
+                post_domains = ("instagram.com",)
+        if intent.instagram == "omitir":
+            post_domains = tuple(domain for domain in post_domains if domain != "instagram.com")
+        portals = {}
+        if intent.job_search and budget.web_calls >= 2:
+            portals["LinkedIn Jobs"] = "linkedin.com"
+            if budget.web_calls >= 3 and (
+                intent.country_code in COMPUTRABAJO_COUNTRIES or "computrabajo" in intent.objective.casefold()
+            ):
+                portals["Computrabajo"] = "computrabajo.com"
         passes = {
             "Web general": self.call(
-                SEARCH_INSTRUCTIONS, query, tokens=budget.research_tokens, searches=budget.web_calls),
+                SEARCH_INSTRUCTIONS, query, tokens=budget.research_tokens, searches=budget.web_calls - len(portals)),
             "Publicaciones en redes": self.call(
                 post_instructions, query, tokens=4500, searches=budget.social_calls, domains=post_domains),
         }
+        for portal, domain in portals.items():
+            passes[portal] = self.call(
+                JOB_INSTRUCTIONS, {**query, "portal": portal}, tokens=3700, searches=1, domains=(domain,))
         if budget.thread_calls:
             passes["Hilos y comentarios"] = self.call(
                 THREAD_INSTRUCTIONS, query, tokens=4500, searches=budget.thread_calls, domains=THREAD_DOMAINS)
         if budget.local_calls:
             passes["Fuentes locales y del rubro"] = self.call(
                 LOCAL_INSTRUCTIONS, query, tokens=5400, searches=budget.local_calls)
-        results = await asyncio.gather(*passes.values(), return_exceptions=True)
+        results = dict(zip(passes, await asyncio.gather(*passes.values(), return_exceptions=True), strict=True))
         evidence = []
         coverage = []
-        for channel, result in zip(passes, results, strict=True):
+        for channel, result in results.items():
             if isinstance(result, (ProviderError, ResearchError)):
                 LOG.warning("Búsqueda parcial (%s): %s", channel, result)
                 coverage.append(f"{channel} · consulta no disponible en esta ejecución.")
@@ -329,26 +439,31 @@ class Research:
                     coverage.append(f"{channel} · consulta realizada sin resultados citables.")
                 elif result.get("status") == "incomplete":
                     coverage.append(f"{channel} · se conservaron los resultados citables de una consulta parcial.")
-        if not evidence:
-            raise ResearchError("La búsqueda no se pudo completar.")
-        initial_posts = results[1]
+        initial_posts = results["Publicaciones en redes"]
         post_sources = [] if isinstance(initial_posts, BaseException) else extract_sources([initial_posts], accessed)
         missing_posts = not post_sources or (
             instagram_first and not any(is_instagram_publication(source.url) for source in post_sources))
-        if budget.targeted_calls and missing_posts:
-            retry_channel = "Instagram por nombre de entidad" if instagram_first else "Búsqueda por nombre de entidad"
+        handles, post_urls = instagram_targets(user_text, extract_sources(evidence, accessed),
+                                               allow_mentions=instagram_first)
+        discover_accounts = direct_ig and not handles
+        if budget.targeted_calls and (missing_posts or discover_accounts):
+            ig_targeted = instagram_first or discover_accounts
+            retry_channel = "Instagram por nombre de entidad" if ig_targeted else "Búsqueda por nombre de entidad"
             try:
                 targeted = await self.call(
-                    TARGETED_INSTRUCTIONS,
+                    TARGETED_INSTRUCTIONS + (IG_DISCOVERY if direct_ig else ""),
                     {**query, "primer_relevamiento": [output_text(result) for result in evidence]},
                     tokens=4500, searches=budget.targeted_calls,
-                    domains=("instagram.com",) if instagram_first else POST_DOMAINS,
+                    domains=("instagram.com",) if ig_targeted else post_domains,
                 )
                 targeted_sources = extract_sources([targeted], accessed)
                 if targeted_sources:
                     evidence.append(targeted)
+                    handles, post_urls = instagram_targets(
+                        user_text, [*targeted_sources, *extract_sources(evidence, accessed)],
+                        allow_mentions=instagram_first)
                 retrieved_posts = targeted_sources and (
-                    not instagram_first or any(is_instagram_publication(source.url) for source in targeted_sources))
+                    not ig_targeted or any(is_instagram_publication(source.url) for source in targeted_sources))
                 if retrieved_posts:
                     coverage = [note for note in coverage if not note.startswith("Publicaciones en redes ·")]
                 else:
@@ -356,17 +471,44 @@ class Research:
             except (ProviderError, ResearchError) as error:
                 LOG.warning("No se completó la búsqueda por entidad: %s", error)
                 coverage.append(f"{retry_channel} · consulta no disponible.")
+        records = []
+        direct_summary = ""
+        if direct_ig and (handles or post_urls or intent.instagram_query):
+            try:
+                reader = partial(visual.read_media, self.client, self.key, self.model, objective=intent.objective)
+                records, notes = await instagram.collect(
+                    self.client, self.apify_token, handles, post_urls, visual_reader=reader,
+                    objective=intent.objective, discovery_query=intent.instagram_query,
+                    reserve_free_credit=self.reserve_free_credit)
+                if records:
+                    coverage = [note for note in coverage if not note.startswith("Instagram por nombre de entidad ·")]
+                for note in notes:
+                    if note.startswith("Instagram vía Apify:"):
+                        direct_summary = note
+                    else:
+                        coverage.append(note)
+                LOG.info("Instagram directo · perfiles=%d publicaciones_semilla=%d registros=%d",
+                         len(handles), len(post_urls), len(records))
+            except (ProviderError, httpx.HTTPError, TimeoutError) as error:
+                LOG.warning("Instagram directo no disponible (%s)", type(error).__name__)
+                coverage.append("Instagram directo · el proveedor no pudo completar la consulta.")
+        elif direct_ig:
+            coverage.append("Instagram directo · la búsqueda no identificó una cuenta o publicación pertinente.")
+        if not evidence and not records:
+            raise ResearchError("La búsqueda no se pudo completar.")
         if budget.contrast_calls:
             try:
                 evidence.append(await self.call(
                     SEARCH_INSTRUCTIONS + "\nContrastá lo más útil con fuentes independientes y buscá contradicciones.",
-                    {**query, "relevamiento_previo": [output_text(result) for result in evidence]},
+                    {**query, "relevamiento_previo": [output_text(result) for result in evidence],
+                     "instagram_para_contrastar": records},
                     tokens=4800, searches=budget.contrast_calls,
                 ))
             except (ProviderError, ResearchError) as error:
                 LOG.warning("No se completó el contraste: %s", error)
                 coverage.append("El contraste adicional no estuvo disponible en esta ejecución.")
         sources = extract_sources(evidence, accessed)
+        direct_evidence = attach_instagram_sources(sources, records, accessed)
         if not sources:
             raise ResearchError("La búsqueda no devolvió fuentes citables.")
         instructions = REPORT_INSTRUCTIONS
@@ -382,9 +524,12 @@ class Research:
                 **query, "máximo_hallazgos": budget.findings,
                 "fuentes": [source.model_dump() for source in sources],
                 "evidencia_recuperada": [output_text(result) for result in evidence],
+                "instagram_directo": direct_evidence,
             }, tokens=budget.report_tokens, schema=Report,
         )
         report = clean_report(parse(Report, response), sources, intent.depth)
+        if direct_summary:
+            report.methodology = f"{direct_summary} {report.methodology}"[:1100].rstrip()
         report.limitations = [*coverage, *report.limitations][:12]
         return report, sources
 

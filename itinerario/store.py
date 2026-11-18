@@ -2,7 +2,7 @@ import json
 import sqlite3
 from hashlib import sha256
 from secrets import token_urlsafe
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS quotas (
 );
 CREATE TABLE IF NOT EXISTS invitations (
     digest TEXT PRIMARY KEY, expires TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS apify_credit (
+    day TEXT PRIMARY KEY, cents INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS guests (
     owner BIGINT PRIMARY KEY
@@ -240,6 +243,23 @@ class Store:
             self._execute("DELETE FROM jobs WHERE stage='done' AND created < ?", (job_cutoff,))
             self._execute("DELETE FROM quotas WHERE day < ?", (job_cutoff[:10],))
             self._execute("DELETE FROM invitations WHERE expires <= ?", (job_cutoff,))
+
+    def reserve_apify_credit(self, cents: int) -> bool:
+        """Reserve the actor's maximum charge before launch, even after an ambiguous timeout."""
+        if cents <= 0:
+            raise ValueError("Actor reservation must be positive.")
+        today = datetime.now(timezone.utc).date()
+        # Keep 32 UTC dates so the rolling limit covers even a 31-day billing cycle.
+        with self._transaction():
+            if self.postgres:
+                self._execute("SELECT pg_advisory_xact_lock(229606174)")
+            self._execute("DELETE FROM apify_credit WHERE day < ?", ((today - timedelta(days=31)).isoformat(),))
+            total = self._execute("SELECT COALESCE(SUM(cents), 0) AS total FROM apify_credit").fetchone()["total"]
+            if total + cents > 400:
+                return False
+            self._execute("INSERT INTO apify_credit VALUES (?, ?) ON CONFLICT(day) "
+                          "DO UPDATE SET cents=apify_credit.cents+excluded.cents", (today.isoformat(), cents))
+            return True
 
     def reserve(self, day: str, category: str, limits: dict[int, int], *, units: int = 1) -> bool:
         if units < 1:

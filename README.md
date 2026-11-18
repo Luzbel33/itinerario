@@ -9,6 +9,8 @@ Itinerario convierte un pedido en Telegram en una respuesta conversacional o en 
 - `/modos` muestra el modelo, el alcance de cada perfil y los cupos. Todos usan el modelo de `OPENAI_MODEL`. El presupuesto nominal de búsqueda es de hasta 2, 5, 11 y 20 acciones respectivamente. Profundo agrega un pase de hilos públicos, contraste independiente y una segunda búsqueda social por nombre cuando el primer pase queda vacío. Extenso suma una búsqueda local o sectorial y espacio para desarrollar el PDF. Se activa con el comando explícito y usa dos puntos del cupo. Los demás perfiles usan uno.
 - Podés pedir una respuesta en el chat o un PDF de extensión aproximada y definir cuántos sectores o paradas querés. La cantidad de páginas depende de las fuentes, las comparaciones y los mapas.
 - Búsqueda web y rastreo dirigido a publicaciones y conversaciones públicas, con enlaces, fecha de consulta y distinción entre evidencia, inferencias y pendientes. Los iconos del PDF identifican la procedencia de las fuentes citadas.
+- Búsquedas laborales con consultas dirigidas a LinkedIn Jobs y, según el país, Computrabajo. Un aviso con puesto y enlace para postularse se distingue de un evento, un prospecto o una recomendación de terceros.
+- En Instagram, Rumbo puede consultar publicaciones, comentarios e historias públicas activas mediante Apify. Interpreta flyers y hasta cuatro fotogramas por video. El informe distingue una imagen de portada de un video leído. Podés indicar una cuenta o un enlace en el pedido.
 - Con `TELEGRAM_PUBLIC_ACCESS=true`, cualquier persona puede iniciar un chat privado desde el enlace del bot. Las demás instalaciones pueden usar `/invitar` para generar enlaces de un solo uso que vencen a los tres días. Cada usuario conserva su propio historial y comparte el cupo global. `TELEGRAM_ALLOWED_USERS` identifica las cuentas administradoras.
 - Mapas con cartografía de fondo, un color por sector y paradas numeradas. La leyenda del mapa general lleva a cada sector del PDF. Los enlaces de Google Maps sirven para abrir la navegación.
 - Rutas para una persona o vehículo, con inicio fijo, llegada flexible o fija y regreso opcional. El orden se calcula sobre una matriz de costos viales. La distancia y duración se calculan con el motor de rutas.
@@ -46,7 +48,13 @@ Telegram se consulta mediante long polling. SQLite confirma el ingreso de cada a
 
 La búsqueda y la composición son llamadas distintas. La búsqueda recibe el objetivo reformulado, con instrucciones para omitir domicilios particulares y datos privados. El historial y el texto de los PDF adjuntos se usan en la conversación. El informe usa enlaces observados en las anotaciones de la búsqueda. El sistema filtra referencias inexistentes y deja fuera de la ruta los domicilios sin evidencia o con una geocodificación ambigua. Cada cita permite inspeccionar qué respalda la fuente.
 
-Las cuotas diarias, el archivo de variables y los parámetros del modelo están en `.env.example`. El presupuesto en dólares se controla en OpenAI Platform, además de las cuotas por usuario en el bot. La aplicación guarda los informes, texto reciente y PDF en el volumen de datos. `/privacidad` explica el uso de proveedores y `/borrar confirmar` elimina el historial del bot. La retención por defecto es de 30 días.
+Las cuotas diarias y los parámetros del modelo están en `.env.example`. Por defecto cada persona dispone de 9 puntos diarios y el bot comparte 36 puntos entre todos. El cupo se renueva a medianoche UTC. El uso de OpenAI se gestiona por separado en OpenAI Platform. La aplicación guarda los informes, texto reciente y PDF en la base configurada. `/privacidad` explica el uso de proveedores y `/borrar confirmar` elimina el historial del bot. La retención por defecto es de 30 días.
+
+### Instagram con crédito gratuito
+
+La integración usa los actores `apify/instagram-scraper`, `apify/instagram-comment-scraper` y `deepmine/instagram-stories-scraper`. Configurá `APIFY_TOKEN` con permisos de ejecución sobre esos tres actores y acceso a los resultados de sus propias ejecuciones. Para un token restringido, verificá en Apify que la cuenta esté en **Free**, el límite mensual sea **USD 5** y la plataforma pause las ejecuciones al agotarlo. Recién entonces registrá en `APIFY_FREE_TOKEN_SHA256` el SHA-256 hexadecimal del token. Rotar el token requiere volver a verificar la cuenta. Revocá la clave antes de cambiar de plan. La imagen Docker incluye FFmpeg; una instalación local necesita `ffmpeg` y `ffprobe` en el PATH para la lectura visual.
+
+Cada ejecución de un actor admite hasta USD 0,05 del crédito. Rumbo reserva el máximo antes de enviarla y guarda las reservas en su base incluso si el proveedor tarda en responder. Para la credencial restringida el máximo reservado es USD 4 en una ventana móvil de 32 fechas UTC. Si falta crédito, los portales laborales y la investigación web continúan. La interpretación de imágenes usa el modelo de OpenAI configurado. La cobertura depende de lo que publiquen las cuentas y de lo que devuelva cada proveedor.
 
 ### Despliegue
 
@@ -66,7 +74,7 @@ Los logs distinguen `telegram_acuse_ms`, `informe_listo_ms` y `telegram_pdf_ms`.
 
 ### Alcance de la cobertura
 
-La búsqueda social prioriza publicaciones públicas en Instagram, Facebook, Threads, X, TikTok, Reddit, LinkedIn, YouTube, Bluesky y canales públicos indexados de Telegram. El informe señala si la consulta social falló o quedó sin resultados citables. Las fuentes privadas, comentarios no indexados y APIs con acceso restringido requieren integraciones autorizadas por separado.
+La búsqueda web incluye publicaciones públicas indexadas en Instagram, Facebook, Threads, X, TikTok, Reddit, LinkedIn, YouTube, Bluesky y Telegram. La consulta directa de Instagram complementa esa búsqueda en los modos profundo y extenso o cuando el pedido prioriza Instagram. Las historias caducan y algunos enlaces apuntan a las historias de la cuenta; en esos casos Rumbo conserva la fecha observada. El informe señala accesos fallidos y consultas sin evidencia.
 
 Las rutas de esta versión optimizan tiempo o distancia vial. Las ventanas de atención, restricciones de carga, paradas y cierres en tiempo real requieren confirmación o planificación específica. El orden propuesto se compara con el orden de descubrimiento cuando ambos se pudieron calcular. Si falla la imagen cartográfica, el PDF marca explícitamente el trazado esquemático.
 

@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y fonts-dejavu-core \
+    && apt-get install --no-install-recommends -y fonts-dejavu-core ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --user-group --create-home itinerario \
     && mkdir -p /app/data \
