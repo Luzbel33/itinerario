@@ -13,21 +13,39 @@ class Depth(StrEnum):
     QUICK = "rápido"
     STANDARD = "detallado"
     DEEP = "profundo"
+    EXTENSIVE = "extenso"
 
 
 @dataclass(frozen=True)
 class ResearchBudget:
-    searches: int
     findings: int
     places: int
     research_tokens: int
     report_tokens: int
+    web_calls: int
+    social_calls: int
+    thread_calls: int = 0
+    local_calls: int = 0
+    contrast_calls: int = 0
+    targeted_calls: int = 0
+    quota_units: int = 1
+
+    @property
+    def searches(self) -> int:
+        return (self.web_calls + self.social_calls + self.thread_calls + self.local_calls
+                + self.contrast_calls + self.targeted_calls)
 
 
 BUDGETS = {
-    Depth.QUICK: ResearchBudget(2, 4, 4, 2200, 2700),
-    Depth.STANDARD: ResearchBudget(5, 9, 8, 4600, 5200),
-    Depth.DEEP: ResearchBudget(9, 15, 12, 7300, 8800),
+    Depth.QUICK: ResearchBudget(4, 4, 2200, 2700, web_calls=1, social_calls=1),
+    Depth.STANDARD: ResearchBudget(9, 8, 4600, 5200, web_calls=3, social_calls=2),
+    Depth.DEEP: ResearchBudget(
+        15, 12, 7300, 8800, web_calls=3, social_calls=2, thread_calls=2, contrast_calls=2, targeted_calls=2,
+    ),
+    Depth.EXTENSIVE: ResearchBudget(
+        20, 15, 8700, 15000, web_calls=5, social_calls=3, thread_calls=3, local_calls=4, contrast_calls=3,
+        targeted_calls=2, quota_units=2,
+    ),
 }
 
 

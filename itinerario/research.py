@@ -13,8 +13,14 @@ from .providers import ProviderError, public_url, request
 
 LOG = logging.getLogger(__name__)
 SOCIAL_DOMAINS = (
-    "instagram.com", "facebook.com", "threads.com", "x.com", "twitter.com", "tiktok.com",
+    "instagram.com", "facebook.com", "threads.com", "threads.net", "x.com", "twitter.com", "tiktok.com",
     "reddit.com", "linkedin.com", "youtube.com", "bsky.app", "t.me",
+)
+POST_DOMAINS = (
+    "instagram.com", "facebook.com", "linkedin.com", "tiktok.com", "youtube.com", "t.me", "bsky.app",
+)
+THREAD_DOMAINS = (
+    "reddit.com", "x.com", "twitter.com", "facebook.com", "threads.com", "threads.net", "youtube.com", "bsky.app",
 )
 
 SYSTEM = """
@@ -37,10 +43,13 @@ o modo. Default si no se indica modo: drive; avisá el supuesto en answer. Usá 
 flexible y return_to_origin true solamente si el usuario quiere volver. Si pide tramos de una cantidad
 específica de puntos, usá sector_size; si pide un número de sectores, usá sector_count. Defaults: 5 y 0.
 Si pide minimizar kilómetros usá distance; por defecto time. Para pins y route necesitás zona suficientemente
-precisa o direcciones completas. country_code es ISO alpha-2 en minúscula, o vacío cuando sea indeterminado.
+precisa o direcciones completas. Usá pins cuando el PDF compara opciones físicas en una zona y las
+direcciones o distancias aportarían una decisión, salvo que el usuario prefiera prescindir del mapa.
+country_code es ISO alpha-2 en minúscula, o vacío cuando sea indeterminado.
 Elegí rápido para un pedido sencillo, detallado para un informe normal y profundo si el usuario pide
-mayor análisis o contraste. En delivery elegí telegram para una consulta breve sin mapa o si la persona
-pide el resultado en el chat. Elegí pdf si pide mapa o informe descargable, o en pedidos extensos.
+mayor análisis o contraste. Extenso se reserva para profundidad_explícita=extenso. En delivery
+elegí telegram si pide el resultado en el chat o para una consulta breve sin mapa. Elegí pdf si pide
+mapas, un informe descargable o activó el modo extenso sin pedir un formato.
 Usá strings vacíos en campos que no aplican.
 """
 
@@ -48,31 +57,75 @@ SEARCH_INSTRUCTIONS = SYSTEM + """
 Investigá con web_search. Usá sitios oficiales y fuentes primarias, medios locales pertinentes, agendas
 publicadas, registros públicos y publicaciones accesibles. Citá junto a cada dato importante. Distingí
 fecha de publicación, fecha del hecho y vigencia efectiva. Buscá la fuente original de cifras, anuncios,
-direcciones, contactos y horarios. Para empresas, separá actividad observable de intención de compra.
-Para eventos, separá fecha vigente, convocatoria abierta y propuesta especulativa. No prometas cobertura
-de redes privadas. Diferenciá conflictos, deduplicá entidades, no inferir datos personales privados.
-Cubrí solo los frentes útiles al objetivo. Escribí un relevamiento de evidencia, con las citas del buscador.
+direcciones, contactos y horarios. Ubicá cada búsqueda en la ciudad, idioma y mercado del pedido.
+Para empleo o contratación, mirá bolsas de trabajo y convocatorias locales. Para compra o venta, mirá
+clasificados, catálogos y mercados pertinentes. Para investigación, buscá medios de la zona, incluidos
+medios pequeños si aportan evidencia, y fuentes originales.
+Si busca comprar, exigí una oferta del artículo concreto. Si busca vender, buscá demanda o un canal que
+reciba el tipo de oferta. Si busca tocar o prestar un servicio, buscá primero llamados vigentes y separá
+los prospectos con antecedentes de contratación. El rubro por sí solo no es una señal.
+Diferenciá conflictos, deduplicá entidades y evitá datos personales privados. Escribí evidencia citada.
+Usá la herramienta de búsqueda y reservá el final para escribir un relevamiento breve y citable.
 """
 
 SOCIAL_INSTRUCTIONS = SYSTEM + """
-Buscá publicaciones públicas que den una pista concreta para este pedido. Priorizá el enlace directo,
-la fecha y quién publicó, por ejemplo un anuncio de una organización, convocatoria, fecha, cambio de
-horarios o discusión local relevante. Un comentario, mención o rumor es una pista por confirmar.
-Dejá fuera perfiles privados, listados de datos personales y publicaciones cuya pertinencia no puedas sostener.
-Citá solo resultados accesibles al buscador. Si no hay evidencia útil, decilo sin completar con suposiciones.
+Buscá activamente posts y comentarios públicos. Consultá Instagram, Facebook, X, LinkedIn, Reddit u
+otras redes del conjunto permitido según su encaje con el tema y la zona. Variá el texto de búsqueda e
+incluí expresiones locales de demanda, oferta o convocatoria. Abrí posts, hilos y respuestas citables
+cuando sean accesibles. Un comentario que pide un producto o servicio puede ser una pista útil: citá
+su evidencia específica, enlace al comentario o hilo y fecha publicada. Diferenciá un aviso del
+organizador de una mención de terceros. Cuando solo veas un extracto, indicá qué falta confirmar.
+Dejá fuera perfiles privados, contactos personales y publicaciones sin relación concreta.
+Si no hay evidencia útil, indicá qué quedó inaccesible o sin resultados.
+Reservá el final para escribir los hallazgos y sus citas después de usar la herramienta.
+"""
+
+THREAD_INSTRUCTIONS = SOCIAL_INSTRUCTIONS + """
+Concentrá este pase en comentarios y respuestas, con términos que usaría alguien que ofrece, busca,
+compra o contrata según el pedido. Abrí el hilo y verificá autoría, fecha y vigencia cuando estén visibles.
+Un título o comentario sin contexto no alcanza para corroborar una oportunidad.
+"""
+
+POST_INSTRUCTIONS = SOCIAL_INSTRUCTIONS + """
+Priorizá las cuentas públicas y anuncios originales del rubro. Para búsquedas locales, probá
+Instagram y Facebook con expresiones del lugar. Para contratación profesional probá LinkedIn
+si encaja con el pedido. Dejá constancia solo de las plataformas que efectivamente pudiste consultar.
+"""
+
+TARGETED_INSTRUCTIONS = POST_INSTRUCTIONS + """
+El pase general ya encontró nombres y fuentes útiles. Tomá hasta tres entidades relevantes del
+relevamiento y buscá sus cuentas públicas y publicaciones concretas por nombre exacto y localidad.
+Comprobá que se trate de la entidad correcta. Un perfil puede servir como contacto público; por sí
+solo no acredita una fecha, oferta o convocatoria. Usá una publicación fechada para esos hechos.
+"""
+
+LOCAL_INSTRUCTIONS = SEARCH_INSTRUCTIONS + """
+Buscá fuentes específicas que la búsqueda general podría pasar por alto: medios locales, entidades,
+registros, agendas y plataformas del rubro accesibles en la zona. Aportá evidencia distinta y relevante
+para subpreguntas concretas del encargo. En asuntos internacionales priorizá fuentes de la jurisdicción
+o del sector pertinente. Citá la fecha y el alcance de cada resultado.
 """
 
 REPORT_INSTRUCTIONS = SYSTEM + """
 Convertí la investigación en un informe accionable. Solamente usá IDs de la lista de fuentes entregada.
+El campo evidencia_recuperada contiene resultados de la búsqueda web realizada por Rumbo para este
+pedido. Describí la verificación según lo que dice cada fuente y evitá afirmar que esos resultados los
+aportó la persona. Los límites de cobertura del proveedor se muestran aparte en el informe.
 Toda afirmación factual en findings usa kind=documentado y una fuente específica, o usa pendiente. Usá
 inferencia para el análisis, diferenciándolo del hecho. No hagas pasar dos publicaciones que copian una
 misma fuente por corroboración independiente. Las fechas corresponden al dato; si no se publican, dejá vacío.
-executive_summary debe condensar lo útil, sin introducir hechos no sustentados. Incluí próximos pasos,
-vacíos de evidencia y criterios de comparación cuando aporten. Podés comparar precios, oportunidades o
-alternativas si unidad, moneda, fecha y alcance son compatibles. Identificá estadísticas estimadas,
-denominador y período; no calcules totales inventados. Evitá títulos vacíos y números decorativos.
-En places incluí canales institucionales públicos, dirección exacta solo si citada en address_sources,
-elegibilidad, horario publicado solo si verificable, referencia útil y un próximo paso. Si hay conflicto
+executive_summary responde el pedido en pocas frases. Si no hay coincidencias corroboradas, decilo de
+entrada. Priorizá pocas opciones; no rellenes para llegar al máximo. Cada hallazgo, lugar y fila de
+comparación agrega información accionable distinta. Reuní detalles relacionados en una sola ficha.
+Incluí hasta tres próximos pasos, con una acción por punto y una frase por acción. Si se pidió un texto
+para contactar o postularse, ponelo en un hallazgo propio. Compará solo si los datos son compatibles.
+Si el objetivo es comprar, cada resultado debe ofrecer el producto exacto o una alternativa pedida. Si
+es vender, exigí evidencia del interés o, si el pedido admite prospección, un canal activo y afín.
+Si pide convocatorias, separá llamados con evidencia de vigencia de prospectos razonables. Evitá
+antecedentes viejos sin valor actual, listas genéricas, inferencias vagas y métricas decorativas.
+En places, fit debe ser una frase corta con la señal exacta de relevancia o disponibilidad y sources
+debe respaldarla. action indica el siguiente paso concreto. Incluí contacto, referencia y horario solo
+si ayudan a actuar. Dirección exacta solo con address_sources. Si hay conflicto
 de direcciones, describilo con fuentes y dejá address_sources vacío mientras no haya una entrada apoyada
 por la fuente primaria. No incluyas coordenadas, tiempos, rutas ni distancias predichas: el backend los calcula.
 Usá [] o strings vacíos en campos sin datos. Tratá documentos privados como aportes del usuario;
@@ -134,19 +187,16 @@ def clean_report(report: Report, sources: Sequence[Source], depth: Depth) -> Rep
         finding.sources = ids(finding.sources)
         if not finding.sources and finding.kind == "documentado":
             finding.kind = "pendiente"
-    report.places = report.places[:budgets.places]
     seen = set()
     unique_places = []
     for place in report.places:
         place.sources = ids(place.sources)
         place.address_sources = ids(place.address_sources)
-        if not place.sources:
-            place.public_contact = ""
         key = (place.name.casefold(), place.address.casefold(), place.locality.casefold())
-        if place.name and key not in seen:
+        if place.name and place.fit and place.sources and key not in seen:
             seen.add(key)
             unique_places.append(place)
-    report.places = unique_places
+    report.places = unique_places[:budgets.places]
     for comparison in report.comparisons:
         comparison.sources = ids(comparison.sources)
     report.comparisons = [item for item in report.comparisons if item.sources]
@@ -159,7 +209,8 @@ class Research:
         self.key = key
         self.model = model
 
-    async def call(self, instructions: str, data: dict, *, tokens: int, searches: int = 0, social: bool = False,
+    async def call(self, instructions: str, data: dict, *, tokens: int, searches: int = 0,
+                   domains: Sequence[str] = (),
                    schema: type[Model] | None = None, effort: str = "low") -> dict:
         payload = {
             "model": self.model, "store": False, "instructions": instructions,
@@ -173,19 +224,34 @@ class Research:
             }}
         if searches:
             search = {"type": "web_search"}
-            if social:
-                search["filters"] = {"allowed_domains": list(SOCIAL_DOMAINS)}
-            payload.update(tools=[search], tool_choice="required", max_tool_calls=searches)
-        response = await request(self.client, "openai", "responses", "POST",
-                                 "https://api.openai.com/v1/responses", json=payload,
-                                 headers={"Authorization": f"Bearer {self.key}"}, timeout=210)
-        result = response.json()
-        usage = result.get("usage") or {}
-        LOG.info("Uso OpenAI (%s) entrada=%s salida=%s", self.model,
-                 usage.get("input_tokens", "?"), usage.get("output_tokens", "?"))
-        if result.get("status") != "completed" or not output_text(result):
-            raise ResearchError("La API no completó la respuesta.")
-        return result
+            if domains:
+                search["filters"] = {"allowed_domains": list(domains)}
+            payload.update(tools=[search], tool_choice="auto", max_tool_calls=searches)
+        for attempt in range(2):
+            response = await request(self.client, "openai", "responses", "POST",
+                                     "https://api.openai.com/v1/responses", json=payload,
+                                     headers={"Authorization": f"Bearer {self.key}"}, timeout=210)
+            result = response.json()
+            usage = result.get("usage") or {}
+            status = result.get("status")
+            actions = sum(item.get("type") == "web_search_call" for item in result.get("output", []))
+            text = output_text(result)
+            LOG.info("OpenAI modelo=%s estado=%s entradas=%s salidas=%s acciones_web=%d",
+                     self.model, status, usage.get("input_tokens", "?"), usage.get("output_tokens", "?"), actions)
+            if text and status == "completed" and (not searches or actions):
+                return result
+            if searches and actions and text and status == "incomplete" and extract_sources([result], ""):
+                return result
+            remaining = payload.get("max_tool_calls", 0) - actions
+            if attempt or not searches or remaining < 1:
+                break
+            payload.update(
+                tool_choice="required" if not actions else "auto",
+                max_tool_calls=remaining,
+                instructions=instructions + "\nHacé una consulta focalizada y terminá con texto y citas.",
+            )
+        reason = (result.get("incomplete_details") or {}).get("reason") or status
+        raise ResearchError(f"La API terminó sin evidencia utilizable ({reason}).")
 
     async def intent(self, message: str, context: str, depth: Depth | None) -> Intent:
         response = await self.call(
@@ -193,8 +259,11 @@ class Research:
             tokens=1700, schema=Intent,
         )
         intent = parse(Intent, response)
-        if depth and intent.action == "report":
-            intent.depth = depth
+        if intent.action == "report":
+            if depth:
+                intent.depth = depth
+            elif intent.depth == Depth.EXTENSIVE:
+                intent.depth = Depth.DEEP
         if intent.action == "report" and intent.map_kind == "route" and not intent.origin:
             intent.action = "clarify"
             intent.answer = "¿Desde dónde querés salir? Con una dirección o un punto de referencia me alcanza."
@@ -203,18 +272,25 @@ class Research:
     async def report(self, intent: Intent, accessed: str) -> tuple[Report, list[Source]]:
         budget = BUDGETS[intent.depth]
         query = {"objetivo": intent.objective, "zona": intent.area, "fecha_consulta": accessed,
-                 "máximo_establecimientos": budget.places, "nivel": intent.depth}
-        social_budget = 1 if intent.depth == Depth.QUICK else 2
-        contrast_budget = 3 if intent.depth == Depth.DEEP else 0
-        web_budget = budget.searches - social_budget - contrast_budget
-        web, social = await asyncio.gather(
-            self.call(SEARCH_INSTRUCTIONS, query, tokens=budget.research_tokens, searches=web_budget),
-            self.call(SOCIAL_INSTRUCTIONS, query, tokens=1800, searches=social_budget, social=True),
-            return_exceptions=True,
-        )
+                 "país": intent.country_code, "máximo_establecimientos": budget.places, "nivel": intent.depth}
+        post_instructions = POST_INSTRUCTIONS if budget.thread_calls else SOCIAL_INSTRUCTIONS
+        post_domains = POST_DOMAINS if budget.thread_calls else SOCIAL_DOMAINS
+        passes = {
+            "Web general": self.call(
+                SEARCH_INSTRUCTIONS, query, tokens=budget.research_tokens, searches=budget.web_calls),
+            "Publicaciones en redes": self.call(
+                post_instructions, query, tokens=4500, searches=budget.social_calls, domains=post_domains),
+        }
+        if budget.thread_calls:
+            passes["Hilos y comentarios"] = self.call(
+                THREAD_INSTRUCTIONS, query, tokens=4500, searches=budget.thread_calls, domains=THREAD_DOMAINS)
+        if budget.local_calls:
+            passes["Fuentes locales y del rubro"] = self.call(
+                LOCAL_INSTRUCTIONS, query, tokens=5400, searches=budget.local_calls)
+        results = await asyncio.gather(*passes.values(), return_exceptions=True)
         evidence = []
         coverage = []
-        for channel, result in (("Web general", web), ("Redes públicas", social)):
+        for channel, result in zip(passes, results, strict=True):
             if isinstance(result, (ProviderError, ResearchError)):
                 LOG.warning("Búsqueda parcial (%s): %s", channel, result)
                 coverage.append(f"{channel} · consulta no disponible en esta ejecución.")
@@ -222,31 +298,61 @@ class Research:
                 raise result
             else:
                 evidence.append(result)
+                cited = extract_sources([result], accessed)
+                LOG.info("Investigación %s · fuentes citables=%d", channel, len(cited))
+                if not cited:
+                    coverage.append(f"{channel} · consulta realizada sin resultados citables.")
+                elif result.get("status") == "incomplete":
+                    coverage.append(f"{channel} · se conservaron los resultados citables de una consulta parcial.")
         if not evidence:
             raise ResearchError("La búsqueda no se pudo completar.")
-        if intent.depth == Depth.DEEP:
+        initial_posts = results[1]
+        if budget.targeted_calls and (
+            isinstance(initial_posts, BaseException) or not extract_sources([initial_posts], accessed)
+        ):
+            try:
+                targeted = await self.call(
+                    TARGETED_INSTRUCTIONS,
+                    {**query, "primer_relevamiento": [output_text(result) for result in evidence]},
+                    tokens=4500, searches=budget.targeted_calls, domains=POST_DOMAINS,
+                )
+                if extract_sources([targeted], accessed):
+                    evidence.append(targeted)
+                    coverage = [note for note in coverage if not note.startswith("Publicaciones en redes ·")]
+                else:
+                    coverage.append("Búsqueda por nombre de entidad · sin publicaciones citables.")
+            except (ProviderError, ResearchError) as error:
+                LOG.warning("No se completó la búsqueda por entidad: %s", error)
+                coverage.append("Búsqueda por nombre de entidad · consulta no disponible.")
+        if budget.contrast_calls:
             try:
                 evidence.append(await self.call(
                     SEARCH_INSTRUCTIONS + "\nContrastá lo más útil con fuentes independientes y buscá contradicciones.",
                     {**query, "relevamiento_previo": [output_text(result) for result in evidence]},
-                    tokens=3600, searches=contrast_budget,
+                    tokens=4800, searches=budget.contrast_calls,
                 ))
             except (ProviderError, ResearchError) as error:
                 LOG.warning("No se completó el contraste: %s", error)
-                coverage.append("El contraste adicional del modo profundo no estuvo disponible.")
+                coverage.append("El contraste adicional no estuvo disponible en esta ejecución.")
         sources = extract_sources(evidence, accessed)
         if not sources:
             raise ResearchError("La búsqueda no devolvió fuentes citables.")
+        instructions = REPORT_INSTRUCTIONS
+        if intent.depth == Depth.EXTENSIVE:
+            instructions += (
+                "\nDesarrollá cada frente relevante del encargo con evidencia y contexto suficiente. "
+                "Usá cronología, criterios de comparación, contradicciones y pasos concretos cuando aporten. "
+                "Si la persona pide una extensión aproximada, tomala como guía y usá la cantidad de "
+                "páginas que justifique la evidencia. Priorizá que cada sección responda una pregunta distinta."
+            )
         response = await self.call(
-            REPORT_INSTRUCTIONS, {
+            instructions, {
                 **query, "máximo_hallazgos": budget.findings,
                 "fuentes": [source.model_dump() for source in sources],
-                "relevamiento_web": [output_text(result) for result in evidence],
+                "evidencia_recuperada": [output_text(result) for result in evidence],
             }, tokens=budget.report_tokens, schema=Report,
         )
         report = clean_report(parse(Report, response), sources, intent.depth)
-        if not isinstance(social, BaseException) and not any(source.channel == "social" for source in sources):
-            coverage.append("Redes públicas · la búsqueda no devolvió publicaciones citables para este pedido.")
         report.limitations = [*coverage, *report.limitations][:12]
         return report, sources
 

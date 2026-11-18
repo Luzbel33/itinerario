@@ -18,6 +18,7 @@ class Settings:
     global_reports: int
     retention_days: int
     source_code_url: str
+    global_chat_requests: int = 60
 
     @classmethod
     def load(cls) -> "Settings":
@@ -39,6 +40,7 @@ class Settings:
             Path(os.getenv("DATA_DIR", "data")), positive_int("CHAT_REQUESTS_PER_DAY", 15),
             positive_int("REPORTS_PER_DAY", 3), positive_int("GLOBAL_REPORTS_PER_DAY", 12),
             positive_int("RETENTION_DAYS", 30), os.getenv("SOURCE_CODE_URL", ""),
+            positive_int("GLOBAL_CHAT_REQUESTS_PER_DAY", 60),
         )
 
 

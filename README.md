@@ -5,8 +5,11 @@ Itinerario convierte un pedido en Telegram en una respuesta conversacional o en 
 ## Capacidades
 
 - Consultas y repreguntas en el chat. `/historial` lista los informes y `/ver ID` vuelve a enviar un PDF y lo selecciona como contexto.
-- Tres niveles de profundidad. `/rapido`, `/detallado` y `/profundo` antes del pedido eligen el nivel. Podés pedir una respuesta breve en el chat o un PDF y definir cuántos sectores querés o cuántas paradas poner en cada uno.
-- Búsqueda web general y rastreo dirigido a publicaciones sociales públicas, con enlaces, fecha de consulta y distinción entre evidencia, inferencias y pendientes.
+- Cuatro niveles. `/rapido`, `/detallado`, `/profundo` y `/extenso` funcionan en la misma línea o por encima del pedido en un mismo mensaje. Escribí en Telegram como en una charla o abrí `/ejemplos` para arrancar.
+- `/modos` muestra el modelo, el alcance de cada perfil y los cupos. Todos usan el modelo de `OPENAI_MODEL`. El presupuesto nominal de búsqueda es de hasta 2, 5, 11 y 20 acciones respectivamente. Profundo agrega un pase de hilos públicos, contraste independiente y una segunda búsqueda social por nombre cuando el primer pase queda vacío. Extenso suma una búsqueda local o sectorial y espacio para desarrollar el PDF. Se activa con el comando explícito y usa dos puntos del cupo. Los demás perfiles usan uno.
+- Podés pedir una respuesta en el chat o un PDF de extensión aproximada y definir cuántos sectores o paradas querés. La cantidad de páginas depende de las fuentes, las comparaciones y los mapas.
+- Búsqueda web y rastreo dirigido a publicaciones y conversaciones públicas, con enlaces, fecha de consulta y distinción entre evidencia, inferencias y pendientes. Los iconos del PDF identifican la procedencia de las fuentes citadas.
+- `/invitar` genera enlaces de un solo uso que vencen a los tres días. Las personas invitadas conservan su propio historial y comparten el cupo global.
 - Mapas con cartografía de fondo, un color por sector y paradas numeradas. La leyenda del mapa general lleva a cada sector del PDF. Los enlaces de Google Maps sirven para abrir la navegación.
 - Rutas para una persona o vehículo, con inicio fijo, llegada flexible o fija y regreso opcional. El orden se calcula sobre una matriz de costos viales. La distancia y duración se calculan con el motor de rutas.
 - PDF adjunto con texto seleccionable, hasta 8 MB. Se extraen hasta 10.000 caracteres de las primeras 12 páginas para consultas en el chat.
@@ -47,9 +50,11 @@ Las cuotas diarias, el archivo de variables y los parámetros del modelo están 
 
 ### Despliegue
 
-Para el piloto alojado, elegí **Northflank Cloud · Developer Sandbox**. El plan gratuito permite un worker activo sin puerto público. Configurá una réplica, el `Dockerfile` de este repositorio y un volumen de escritura única en `/app/data` para SQLite. Elegí el plan y tamaño incluidos en Sandbox y verificá el costo mostrado antes de crear recursos. [Plan Sandbox](https://northflank.com/pricing) · [Servicios Docker](https://northflank.com/docs/v1/application/getting-started/build-and-deploy-your-code) · [Volúmenes persistentes](https://northflank.com/docs/v1/application/databases-and-persistence/add-a-volume)
+En **Render**, creá un Web Service Docker, elegí **Free**, configurá `python -m itinerario --webhook` como comando y `/healthz` como comprobación. Render Free suspende el servicio inactivo y lo vuelve a arrancar con un pedido. Guardá el historial y los trabajos en una base PostgreSQL accesible con `DATABASE_URL` por una conexión de sesión. La base gratuita de Render vence a los 30 días y requiere migración si se usa para un piloto. [Render Free](https://render.com/docs/free) · [Web Services](https://render.com/docs/web-services)
 
-Cargá `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GEOAPIFY_API_KEY` y `TELEGRAM_ALLOWED_USERS` como secretos de ejecución. Configurá `SOURCE_CODE_URL` con el enlace a la versión desplegada. Apagá la instancia local si comparte ese token. Para mantener el costo en cero, usá los créditos disponibles de OpenAI y mantené deshabilitada la recarga automática en esa organización.
+Cargá `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GEOAPIFY_API_KEY`, `TELEGRAM_ALLOWED_USERS`, `DATABASE_URL` y un `TELEGRAM_WEBHOOK_SECRET` aleatorio como secretos de ejecución. Configurá `SOURCE_CODE_URL` con el enlace a la versión desplegada. Una vez que `/healthz` responda, detené la instancia local y registrá por Bot API `setWebhook` con la URL HTTPS `/telegram`, el mismo `secret_token`, `allowed_updates` con `message` y `drop_pending_updates` en `false`. [Telegram Bot API](https://core.telegram.org/bots/api#setwebhook)
+
+Para mantener el costo en cero, verificá el plan del servicio, usá los créditos disponibles de OpenAI y mantené deshabilitada la recarga automática en esa organización.
 
 Probá desde Telegram un pedido corto, un informe con mapa por sectores y una repregunta. Reiniciá el worker de prueba y comprobá con `/historial` que el informe siga disponible. Los logs permiten cotejar estos pasos con la entrega del PDF y detectar fallos de Telegram, OpenAI o Geoapify.
 

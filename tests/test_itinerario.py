@@ -98,8 +98,7 @@ class MapAndEvidenceTests(unittest.TestCase):
         result.places[0].address_sources = [99]
         result.places[0].sources = [99]
         result = clean_report(result, sources, Depth.QUICK)
-        self.assertEqual(result.places[0].address_sources, [])
-        self.assertEqual(result.places[0].public_contact, "")
+        self.assertEqual([place.name for place in result.places], ["Espacio 2", "Espacio 3", "Espacio 4"])
 
 
 class StoreTests(unittest.TestCase):
@@ -149,6 +148,7 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.map_calls = []
         self.fail_geocodes = False
         self.fail_social = False
+        self.empty_initial_posts = False
         self.report_response = intent()
         fake_map = Image.new("RGB", (1000, 650), color="#eef6f2")
         stream = io.BytesIO()
@@ -166,14 +166,22 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(payload["store"])
             self.openai_calls.append(payload)
             if payload.get("tools"):
-                if payload["tools"][0].get("filters"):
+                filters = payload["tools"][0].get("filters")
+                if filters:
                     if self.fail_social:
                         return httpx.Response(503)
-                    return httpx.Response(200, json=response("Fecha publicada en la red", [
-                        {"type": "url_citation", "title": "Publicación del evento",
-                         "url": "https://www.instagram.com/p/ficticio/"},
-                    ]))
-                return httpx.Response(200, json=evidence())
+                    if (self.empty_initial_posts and "instagram.com" in filters["allowed_domains"]
+                            and "primer_relevamiento" not in json.loads(payload["input"])):
+                        result = response("No encontré publicaciones citables en la búsqueda inicial.")
+                    else:
+                        result = response("Fecha publicada en la red", [
+                            {"type": "url_citation", "title": "Publicación del evento",
+                             "url": "https://www.instagram.com/p/ficticio/"},
+                        ])
+                else:
+                    result = evidence()
+                result["output"].insert(0, {"type": "web_search_call", "status": "completed"})
+                return httpx.Response(200, json=result)
             if payload["text"]["format"]["name"] == "intent":
                 return httpx.Response(200, json=response(self.report_response.model_dump_json()))
             return httpx.Response(200, json=response(report().model_dump_json()))
@@ -182,7 +190,10 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
         self.assertEqual(request.url.params["apiKey"], "maps-fixture")
         if path.endswith("/geocode/search"):
-            number = request.url.params["text"].split(",")[0].split()[-1]
+            address = request.url.params["text"].split(",")[0]
+            if not address.startswith("Cabrera "):
+                return httpx.Response(200, json={"results": []})
+            number = address.split()[-1]
             index = int(number) - 4000
             matched = "4000" if self.fail_geocodes else number
             lon, lat = POINTS[index]
@@ -230,6 +241,7 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([v.point_indices for v in views[1:]], [[0, 1, 2], [2, 3, 4], [4, 5]])
         self.assertEqual(len(self.map_calls), 4)
         layers = [json.loads(request.content)["geometries"] for request in self.map_calls]
+        self.assertTrue(all(isinstance(json.loads(request.content)["area"], dict) for request in self.map_calls))
         self.assertEqual(len({layer["linecolor"] for layer in layers[0] if layer["linewidth"] == 5}), 3)
         self.assertTrue(all(layer["type"] == "polyline6" for layer in layers[0]))
         first_tramo = parse_qs(urlsplit(directions(geographic, views[1])).query)
@@ -274,17 +286,65 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(geo.points)
 
     async def test_deep_research_uses_two_bounded_passes(self):
-        requested = intent().model_copy(update={"depth": Depth.DEEP, "map_kind": "none"})
-        service = Research(self.client, "openai-fixture", self.settings.model)
-        await service.report(requested, STAMP[:10])
-        self.assertEqual([call["max_tool_calls"] for call in self.openai_calls if "tools" in call], [4, 2, 3])
+        self.report_response = intent().model_copy(update={"map_kind": "none"})
+        prompt = "Soy DJ en Salta Capital. Buscá oportunidades y prepará un PDF."
+        await self.bot.handle(await self.enqueue(1, f"/profundo\n\n{prompt}"))
+        parsed_input = json.loads(self.openai_calls[0]["input"])
+        self.assertEqual(parsed_input["pedido"], prompt)
+        self.assertEqual(parsed_input["profundidad_explícita"], Depth.DEEP)
+        self.assertEqual([call["max_tool_calls"] for call in self.openai_calls if "tools" in call], [3, 2, 2, 2])
+        self.assertEqual(Snapshot.model_validate_json(self.store.report(OWNER)["data"]).depth, Depth.DEEP)
+
+    async def test_extensive_research_requires_explicit_selection_and_two_quota_points(self):
+        self.report_response = intent().model_copy(update={"depth": Depth.EXTENSIVE, "map_kind": "none"})
+        implicit = await self.bot.research.intent("Quiero un informe largo", "", None)
+        self.assertEqual(implicit.depth, Depth.DEEP)
+        self.openai_calls.clear()
+        await self.bot.handle(await self.enqueue(1, "/extenso\n\nInvestigá la agenda de Salta."))
+        self.assertEqual([call["max_tool_calls"] for call in self.openai_calls if "tools" in call], [5, 3, 3, 4, 3])
+        self.assertEqual(Snapshot.model_validate_json(self.store.report(OWNER)["data"]).depth, Depth.EXTENSIVE)
+        day = self.store.report(OWNER)["created"][:10]
+        self.assertFalse(self.store.reserve(day, "report", {OWNER: 3, 0: 12}, units=2))
+        self.assertTrue(self.store.reserve(day, "report", {OWNER: 3, 0: 12}))
 
     async def test_social_failure_preserves_the_general_web_report(self):
         self.fail_social = True
         service = Research(self.client, "openai-fixture", self.settings.model)
         result, sources = await service.report(intent(), STAMP[:10])
         self.assertEqual([source.channel for source in sources], ["web"])
-        self.assertTrue(any("Redes públicas" in limit for limit in result.limitations))
+        self.assertTrue(any("Publicaciones en redes" in limit for limit in result.limitations))
+
+    async def test_deep_research_retries_publications_using_discovered_entities(self):
+        self.empty_initial_posts = True
+        service = Research(self.client, "openai-fixture", self.settings.model)
+        selected = intent().model_copy(update={"depth": Depth.DEEP})
+        result, sources = await service.report(selected, STAMP[:10])
+        targeted = [call for call in self.openai_calls if "primer_relevamiento" in json.loads(call["input"])]
+        self.assertEqual(len(targeted), 1)
+        self.assertEqual(targeted[0]["max_tool_calls"], 2)
+        self.assertTrue(any(source.channel == "social" for source in sources))
+        self.assertFalse(any(limit.startswith("Publicaciones en redes ·") for limit in result.limitations))
+
+    async def test_guides_and_guest_onboarding_do_not_call_openai(self):
+        self.bot.username = "FixtureBot"
+        commands = [(1, OWNER, "/start", "mensaje normal"), (2, OWNER, "/ayuda", "Dónde busca"),
+                    (3, OWNER, "/ejemplos", "Comprar")]
+        for identifier, owner, command, expected in commands:
+            self.store.enqueue([update(identifier, command, owner)], STAMP, self.settings.allowed_users)
+            await self.bot.handle(self.store.next_job())
+            reply = self.store.next_delivery(STAMP)
+            self.assertIn(expected, json.loads(reply["delivery"])["text"])
+            self.store.finish(reply["id"])
+        await self.bot.handle(await self.enqueue(4, "/invitar"))
+        invitation = self.store.next_delivery(STAMP)
+        code = json.loads(invitation["delivery"])["text"].split("?start=")[1]
+        self.store.finish(4)
+        for identifier, guest in [(5, OWNER + 1), (6, OWNER + 2)]:
+            self.store.enqueue([update(identifier, f"/start {code}", guest)], STAMP, self.settings.allowed_users)
+            await self.bot.handle(self.store.next_job())
+        self.assertTrue(self.store.is_guest(OWNER + 1))
+        self.assertFalse(self.store.is_guest(OWNER + 2))
+        self.assertEqual(self.openai_calls, [])
 
     async def test_quick_research_can_deliver_a_cited_chat_message(self):
         self.report_response = intent().model_copy(update={"delivery": "telegram", "map_kind": "none"})

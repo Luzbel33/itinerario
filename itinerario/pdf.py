@@ -1,8 +1,8 @@
 import io
 import math
 import os
-from collections import Counter
 from pathlib import Path
+from urllib.parse import urlsplit
 from xml.sax.saxutils import escape, quoteattr
 
 from reportlab.lib import colors
@@ -16,11 +16,14 @@ from .geography import directions, map_markers, map_views, marker_for, route_lay
 from .models import Geography, MapView, Snapshot, Source
 from .providers import public_url
 
-INK = colors.HexColor("#192B41")
-MUTED = colors.HexColor("#435367")
-ACCENT = colors.HexColor("#185DB2")
-PALE = colors.HexColor("#F2F6FA")
-BORDER = colors.HexColor("#D7E2EF")
+INK = colors.HexColor("#18353C")
+MUTED = colors.HexColor("#47595D")
+ACCENT = colors.HexColor("#09666B")
+PAPER = colors.HexColor("#FBFAF6")
+PALE = colors.HexColor("#EEF5F3")
+BORDER = colors.HexColor("#CADCD7")
+WARM = colors.HexColor("#FBEEE3")
+TERRACOTTA = colors.HexColor("#AD4C24")
 FINDING_COLORS = {"documentado": "#08725F", "inferencia": "#6C409F", "pendiente": "#8D500B"}
 MARGIN = 42
 CONTENT = A4[0] - 2 * MARGIN - 12
@@ -47,13 +50,13 @@ def fonts() -> tuple[str, str]:
 def paragraph(content: str, role: str = "body") -> Paragraph:
     normal, bold = fonts()
     settings = {
-        "title": (30, 34, 12, bold, INK),
-        "section": (17, 22, 10, bold, INK),
+        "title": (31, 35, 13, bold, INK),
+        "section": (16, 22, 8, bold, ACCENT),
         "minor": (12, 16, 5, bold, INK),
-        "body": (10, 15, 7, normal, INK),
-        "detail": (9, 13, 6, normal, MUTED),
-        "caption": (8, 12, 5, normal, MUTED),
-        "metric": (11, 16, 10, bold, ACCENT),
+        "body": (11, 16, 8, normal, INK),
+        "detail": (9.5, 14, 5, normal, MUTED),
+        "caption": (8.5, 12, 4, normal, MUTED),
+        "metric": (10, 14, 8, bold, ACCENT),
         "number": (17, 22, 2, bold, INK),
     }
     size, leading, after, font, color = settings[role]
@@ -66,7 +69,7 @@ def paragraph(content: str, role: str = "body") -> Paragraph:
 def link(label: str, url: str) -> str:
     if not public_url(url):
         return escape(label)
-    return f'<link href={quoteattr(url)} color="#185DB2"><u>{escape(label)}</u></link>'
+    return f'<link href={quoteattr(url)} color="#09666B"><u>{escape(label)}</u></link>'
 
 
 def citations(numbers: list[int], sources: dict[int, Source]) -> str:
@@ -81,14 +84,88 @@ def metrics(meters: float, seconds: float) -> str:
     return f"{km} km · {time}"
 
 
-def panel(rows, widths, *, fill=PALE, padding=9):
-    return Table(rows, colWidths=widths, hAlign="LEFT", style=[
+def panel(rows, widths, *, fill=PALE, padding=9, edge=None):
+    style = [
         ("BACKGROUND", (0, 0), (-1, -1), fill),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 11), ("RIGHTPADDING", (0, 0), (-1, -1), 11),
         ("TOPPADDING", (0, 0), (-1, -1), padding), ("BOTTOMPADDING", (0, 0), (-1, -1), padding),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, BORDER),
-    ])
+    ]
+    if edge:
+        style.append(("LINEBEFORE", (0, 0), (0, -1), 2.4, edge))
+    return Table(rows, colWidths=widths, hAlign="LEFT", style=style)
+
+
+PLATFORMS = (
+    (("instagram.com",), "Instagram", "#AD285F", "camera"),
+    (("facebook.com",), "Facebook", "#1D56B7", "f"),
+    (("x.com", "twitter.com"), "X", "#243137", "cross"),
+    (("linkedin.com",), "LinkedIn", "#0A6088", "in"),
+    (("reddit.com",), "Reddit", "#B84419", "thread"),
+    (("youtube.com",), "YouTube", "#B52227", "play"),
+    (("tiktok.com",), "TikTok", "#242D36", "music"),
+    (("threads.com", "threads.net"), "Threads", "#30383C", "@"),
+    (("bsky.app",), "Bluesky", "#2562AB", "thread"),
+    (("t.me",), "Telegram", "#117794", "send"),
+)
+
+
+def source_platform(url: str):
+    host = urlsplit(url).hostname or ""
+    for domains, label, color, mark in PLATFORMS:
+        if any(host == domain or host.endswith(f".{domain}") for domain in domains):
+            return label, color, mark
+    return "Web", "#476565", "web"
+
+
+class PlatformMark(Flowable):
+    def __init__(self, color: str, mark: str):
+        super().__init__()
+        self.width = self.height = 19
+        self.color, self.mark = color, mark
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(colors.HexColor(self.color))
+        c.roundRect(0, 0, 19, 19, 4, fill=1, stroke=0)
+        c.setStrokeColor(colors.white)
+        c.setFillColor(colors.white)
+        c.setLineWidth(1.2)
+        c.setLineCap(1)
+        if self.mark == "camera":
+            c.roundRect(4.5, 4.5, 10, 10, 2.3, fill=0, stroke=1)
+            c.circle(9.5, 9.5, 2.3, fill=0, stroke=1)
+            c.circle(12.9, 12.9, .65, fill=1, stroke=0)
+        elif self.mark == "cross":
+            c.line(5.6, 14, 13.4, 5)
+            c.line(5.6, 5, 13.4, 14)
+        elif self.mark == "thread":
+            c.ellipse(4, 5.6, 15, 12.5, fill=0, stroke=1)
+            c.line(9.5, 12.5, 11, 15)
+            c.circle(13, 15, 1, fill=1, stroke=0)
+            c.circle(7.2, 9.4, .65, fill=1, stroke=0)
+            c.circle(11.8, 9.4, .65, fill=1, stroke=0)
+        elif self.mark == "play":
+            path = c.beginPath()
+            path.moveTo(7, 5.3)
+            path.lineTo(14, 9.5)
+            path.lineTo(7, 13.7)
+            path.close()
+            c.drawPath(path, fill=1, stroke=0)
+        elif self.mark == "music":
+            c.circle(8, 6.5, 2, fill=1, stroke=0)
+            c.line(10, 6.5, 10, 14.2)
+            c.line(10, 14.2, 13.6, 12.5)
+        elif self.mark == "send":
+            c.lines([(4, 10, 15, 14), (15, 14, 12, 5), (12, 5, 9, 8), (9, 8, 13, 12), (9, 8, 4, 10)])
+        elif self.mark == "web":
+            c.circle(9.5, 9.5, 5.3, fill=0, stroke=1)
+            c.ellipse(7, 4.2, 12, 14.8, fill=0, stroke=1)
+            c.line(4.5, 9.5, 14.5, 9.5)
+        else:
+            c.setFont("Helvetica-Bold", 10.5)
+            c.drawCentredString(9.5, 5.6, self.mark)
 
 
 class Swatch(Flowable):
@@ -204,10 +281,12 @@ def draw_map(story, snapshot: Snapshot, view: MapView, image: bytes | None,
         if point.place_index is not None:
             place = snapshot.report.places[point.place_index]
             reference = f"<br/>{escape(place.reference)}" if place.reference else ""
+        lon, lat = point.coordinates
+        location_url = f"https://www.google.com/maps/search/?api=1&query={lat:.6f}%2C{lon:.6f}"
         rows.append([
             paragraph(f'<font color="{pin_colors[point.coordinates]}"><b>{marker}</b></font>', "metric"),
             paragraph(f"<b>{escape(point.label)}</b><br/>{escape(point.address)}{reference}", "detail"),
-            paragraph(transit.removeprefix("<br/>"), "caption"),
+            paragraph(link("Abrir punto", location_url) + transit, "caption"),
         ])
     story.append(panel(rows, [41, CONTENT - 160, 119], padding=5))
 
@@ -219,10 +298,15 @@ def build_pdf(snapshot: Snapshot, map_images: list[bytes | None],
     geo = snapshot.geography
     source_by_id = {source.id: source for source in snapshot.sources}
     story = [
-        paragraph(escape(snapshot.depth.value.capitalize()), "metric"),
+        paragraph(f"Modo {escape(snapshot.depth.value)}", "metric"),
         paragraph(escape(report.title), "title"),
         paragraph(escape(report.executive_summary)),
     ]
+    if report.next_steps:
+        actions = [paragraph("Qué hacer ahora", "minor")]
+        actions.extend(paragraph(f"• {escape(item)}", "detail") for item in report.next_steps[:3])
+        story.append(panel([[actions]], [CONTENT], fill=WARM, padding=9, edge=TERRACOTTA))
+        story.append(Spacer(1, 11))
     if geo.legs:
         mode = {"drive": "Auto", "walk": "A pie", "bicycle": "Bicicleta"}[geo.mode]
         objective = "distancia" if geo.objective == "distance" else "tiempo"
@@ -232,46 +316,23 @@ def build_pdf(snapshot: Snapshot, map_images: list[bytes | None],
         story.append(panel([[[paragraph(value, "number"), paragraph(label, "caption")]
                              for value, label in kpis]], [CONTENT / 3] * 3))
         story.append(Spacer(1, 6))
-        story.append(paragraph("Distancia y tiempo estimados. Consultá tráfico, cierres, acceso y horarios.",
-                               "detail"))
         if geo.baseline_meters is not None and geo.baseline_seconds is not None:
             baseline = metrics(geo.baseline_meters, geo.baseline_seconds)
-            story.append(paragraph(f"<b>Comparación vial.</b> Orden inicial {baseline}. Orden propuesto {summary}."))
-    if report.places:
-        counts = Counter(place.category or "Sin categoría" for place in report.places)
-        categories = " · ".join(f"{escape(category)} ({count})" for category, count in counts.items())
-        story.append(paragraph(f"<b>{len(report.places)} resultados relevados.</b> {categories}.", "detail"))
-    for index, (view, image) in enumerate(zip(map_views(geo), map_images, strict=True)):
+            if baseline != summary:
+                story.append(paragraph(f"Orden inicial: {baseline}.", "caption"))
+    views = map_views(geo)
+    for index, (view, image) in enumerate(zip(views, map_images, strict=True)):
         story.append(PageBreak() if index else Spacer(1, 9))
         group = []
         draw_map(group, snapshot, view, image, map_credits)
-        if not view.sector and len(map_views(geo)) > 1:
+        if not view.sector and len(views) > 1:
             story.append(KeepTogether(group))
         else:
             story.extend(group)
 
-    if geo.points:
-        story.append(PageBreak())
-    if report.next_steps:
-        story.append(paragraph("Próximos pasos", "section"))
-        first = paragraph(escape(report.next_steps[0]), "body")
-        story.append(panel([[first]], [CONTENT], padding=5))
-        story.append(Spacer(1, 7))
-        for item in report.next_steps[1:]:
-            story.append(paragraph(f"• {escape(item)}"))
-    if report.findings:
-        story.append(paragraph("Hallazgos", "section"))
-        for finding in report.findings:
-            date = f" · {escape(finding.date)}" if finding.date else ""
-            story.append(KeepTogether([
-                paragraph(escape(finding.title), "minor"),
-                paragraph(f'<font color="{FINDING_COLORS[finding.kind]}"><b>{finding.kind.capitalize()}</b></font>'
-                          f"{date}", "caption"),
-                paragraph(escape(finding.detail) + citations(finding.sources, source_by_id)),
-            ]))
     if report.places:
-        story.append(paragraph("Fichas de lugares", "section"))
-        priority = [point.place_index for point in geo.points if point.place_index is not None]
+        story.extend([Spacer(1, 12), paragraph("Opciones para revisar", "section")])
+        priority = list(dict.fromkeys(point.place_index for point in geo.points if point.place_index is not None))
         numbered = {point.place_index: marker_for(point, index, geo)
                     for index, point in enumerate(geo.points) if point.place_index is not None}
         order = priority + [index for index in range(len(report.places)) if index not in priority]
@@ -279,15 +340,31 @@ def build_pdf(snapshot: Snapshot, map_images: list[bytes | None],
             place = report.places[index]
             number = f"{numbered[index]} · " if index in numbered else ""
             subtext = " · ".join(escape(text) for text in (place.category, place.locality, place.date) if text)
-            address = escape(place.address) + citations(place.address_sources, source_by_id)
-            if place.address and not place.address_sources:
-                address += " (domicilio sin fuente específica)"
-            contact = f"<br/><b>Contacto público:</b> {escape(place.public_contact)}" if place.public_contact else ""
+            address = escape(place.address) + citations(place.address_sources, source_by_id) if place.address_sources else ""
+            evidence = [paragraph(number + escape(place.name), "minor")]
+            if subtext:
+                evidence.append(paragraph(subtext, "caption"))
+            evidence.append(paragraph(escape(place.fit) + citations(place.sources, source_by_id), "detail"))
+            action = []
+            if place.action:
+                action.append(paragraph(escape(place.action), "detail"))
+            if place.public_contact:
+                contact = link("Abrir contacto", place.public_contact) if public_url(place.public_contact) else escape(place.public_contact)
+                action.append(paragraph(contact, "detail"))
+            if address:
+                action.append(paragraph(address, "caption"))
+            widths = [CONTENT * .57, CONTENT * .43] if action else [CONTENT]
+            story.append(panel([[evidence, action] if action else [evidence]], widths,
+                               fill=colors.white, padding=8, edge=ACCENT))
+            story.append(Spacer(1, 8))
+    if report.findings:
+        story.append(paragraph("Señales clave", "section"))
+        for finding in report.findings:
+            date = f" · {escape(finding.date)}" if finding.date else ""
+            tag = f'<font color="{FINDING_COLORS[finding.kind]}"><b>{finding.kind.capitalize()}</b></font>'
             story.append(KeepTogether([
-                paragraph(number + escape(place.name), "minor"),
-                paragraph(subtext + (f"<br/>{address}" if address else ""), "detail"),
-                paragraph(escape(place.fit) + citations(place.sources, source_by_id)),
-                paragraph(f"<b>Próxima acción:</b> {escape(place.action)}{contact}", "detail"),
+                paragraph(f"<b>{escape(finding.title)}</b> · {tag}{date}", "detail"),
+                paragraph(escape(finding.detail) + citations(finding.sources, source_by_id), "detail"),
             ]))
     if report.comparisons:
         story.append(paragraph("Comparativas", "section"))
@@ -297,38 +374,53 @@ def build_pdf(snapshot: Snapshot, map_images: list[bytes | None],
             for item in report.comparisons
         ]
         story.append(panel(rows, [134, CONTENT - 134], padding=5))
-    if report.methodology:
-        story.extend([paragraph("Metodología", "section"), paragraph(escape(report.methodology))])
     limits = list(dict.fromkeys([*report.limitations, *geo.notes, *geo.excluded]))
     if limits:
         story.append(paragraph("Pendientes y límites", "section"))
         for item in limits:
-            story.append(paragraph(f"• {escape(item)}"))
-    if snapshot.sources:
-        story.append(paragraph("Fuentes consultadas", "section"))
+            story.append(paragraph(f"• {escape(item)}", "detail"))
+    used_sources = {number for item in [*report.findings, *report.places, *report.comparisons] for number in item.sources}
+    used_sources.update(number for place in report.places for number in place.address_sources)
+    if used_sources:
+        story.append(paragraph("Fuentes citadas", "section"))
+        rows = []
         for source in snapshot.sources:
-            channel = "Red pública" if source.channel == "social" else "Web"
-            story.append(paragraph(
-                f"<b>[{source.id}]</b> {link(source.title, source.url)} · {channel} · {escape(source.accessed[:10])}",
-                "detail",
-            ))
+            if source.id not in used_sources:
+                continue
+            platform, color, mark = source_platform(source.url)
+            rows.append([
+                PlatformMark(color, mark),
+                paragraph(f"<b>[{source.id}] · {platform}</b><br/>{link(source.title, source.url)}", "caption"),
+            ])
+        story.append(panel(rows, [45, CONTENT - 45], padding=5, fill=colors.white))
+    if report.methodology:
+        story.append(paragraph(escape(report.methodology), "caption"))
 
     def page(canvas, document):
         body, bold = fonts()
         width, height = A4
-        canvas.setFont(bold, 9)
+        canvas.setFillColor(PAPER)
+        canvas.rect(0, 0, width, height, fill=1, stroke=0)
         canvas.setFillColor(ACCENT)
-        canvas.drawString(MARGIN, height - 31, "ITINERARIO")
+        canvas.roundRect(MARGIN, height - 35, 20, 20, 5, fill=1, stroke=0)
+        canvas.setStrokeColor(colors.white)
+        canvas.setLineWidth(1)
+        canvas.circle(MARGIN + 10, height - 25, 6, fill=0, stroke=1)
+        canvas.line(MARGIN + 7, height - 28, MARGIN + 13, height - 22)
+        canvas.setFillColor(INK)
+        canvas.setFont(bold, 11)
+        canvas.drawString(MARGIN + 27, height - 29, "Rumbo")
         canvas.setStrokeColor(BORDER)
+        canvas.setLineWidth(.65)
         canvas.line(MARGIN, height - 40, width - MARGIN, height - 40)
         canvas.line(MARGIN, 40, width - MARGIN, 40)
         canvas.setFont(body, 8)
         canvas.setFillColor(MUTED)
         canvas.drawString(MARGIN, 26, f"Fecha de consulta {snapshot.created[:10]} (UTC)")
-        canvas.drawRightString(width - MARGIN, 26, str(document.page))
+        canvas.drawRightString(width - MARGIN, 26, f"Pág. {document.page}")
 
     doc = SimpleDocTemplate(
-        stream, pagesize=A4, title=report.title, author="Itinerario", leftMargin=MARGIN,
+        stream, pagesize=A4, title=report.title, author="Rumbo", leftMargin=MARGIN,
         rightMargin=MARGIN, topMargin=53, bottomMargin=52,
     )
     doc.build(story, onFirstPage=page, onLaterPages=page)

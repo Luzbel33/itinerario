@@ -28,13 +28,13 @@ def parse_coordinate(location: str) -> Coordinate | None:
     return (lon, lat) if abs(lon) <= 180 and abs(lat) <= 85 else None
 
 
-def geocode_candidate(result: dict, address: str, endpoint: bool) -> bool:
+def geocode_candidate(result: dict, address: str) -> bool:
     rank = result.get("rank", {})
     if rank.get("confidence", 0) < 0.68:
         return False
     point_type = result.get("result_type")
     if point_type not in {"building", "amenity"}:
-        return endpoint and point_type == "street" and (" y " in address.casefold() or "&" in address)
+        return False
     address_tokens = normalize(address)
     first_line = result.get("address_line1", "") + " " + result.get("street", "")
     matched = normalize(first_line)
@@ -43,6 +43,26 @@ def geocode_candidate(result: dict, address: str, endpoint: bool) -> bool:
     if numbers and number not in numbers:
         return False
     return bool((address_tokens & matched) - numbers)
+
+
+def locality_hint(area: str, country: str) -> str:
+    area = re.split(r"\s+[·|–—]\s+", area, maxsplit=1)[0].strip()
+    if country == "ar":
+        area = re.sub(r"\s+capital$", "", area, flags=re.IGNORECASE)
+    return area
+
+
+def named_point(result: dict, name: str, area: str) -> bool:
+    name_tokens = normalize(name)
+    area_tokens = normalize(area)
+    if not name_tokens or not area_tokens or result.get("result_type") not in {"amenity", "building"}:
+        return False
+    candidate = normalize(result.get("name") or "")
+    subject = name_tokens - area_tokens
+    if not subject or candidate - area_tokens != subject:
+        return False
+    location_names = (normalize(result.get(field) or "") for field in ("city", "town", "village", "municipality"))
+    return any(location and (location <= area_tokens or area_tokens <= location) for location in location_names)
 
 
 def optimal_order(matrix: list[list[float | None]], fixed_end: bool) -> list[int] | None:
@@ -195,16 +215,27 @@ class Geoapify:
         direct = parse_coordinate(address) if endpoint else None
         if direct:
             return Point(label=label, address=address, coordinates=direct)
-        params = {"text": f"{address}, {area}" if area else address, "limit": 4, "format": "json",
-                  "bias": "countrycode:none", "apiKey": self.key}
+        area = locality_hint(area, country)
+        params = {"limit": 4, "format": "json", "bias": "countrycode:none", "apiKey": self.key}
         if re.fullmatch("[a-z]{2}", country):
             params["filter"] = f"countrycode:{country}"
-        response = await request(self.client, "geoapify", "geocoding", "GET", API + "/geocode/search", params=params)
-        results = [item for item in response.json().get("results", []) if geocode_candidate(item, address, endpoint)]
-        if not results:
+
+        async def search(text: str):
+            query = {**params, "text": f"{text}, {area}" if area else text}
+            response = await request(
+                self.client, "geoapify", "geocoding", "GET", API + "/geocode/search", params=query)
+            return response.json().get("results", [])
+
+        results = await search(address)
+        precise = [item for item in results if geocode_candidate(item, address)]
+        if endpoint and not precise:
+            precise = [item for item in results if named_point(item, address, area)]
+        if not precise and place_index is not None and area and label != address:
+            precise = [item for item in await search(label) if named_point(item, label, area)]
+        if not precise:
             return None
-        best = results[0]
-        for item in results[1:]:
+        best = precise[0]
+        for item in precise[1:]:
             distance = math.hypot(item["lat"] - best["lat"], item["lon"] - best["lon"])
             if distance > 0.001 and best["rank"]["confidence"] - item["rank"]["confidence"] < 0.10:
                 return None
@@ -264,7 +295,7 @@ class Geoapify:
         payload = {
             "style": "osm-bright-grey", "width": MAP_SIZE[0], "height": MAP_SIZE[1],
             "format": "png", "lang": language, "attribution": "default",
-            "area": [{"type": "rect", "value": {"lon1": west, "lat1": south, "lon2": east, "lat2": north}}],
+            "area": {"type": "rect", "value": {"lon1": west, "lat1": south, "lon2": east, "lat2": north}},
             "markers": [{"lat": lat, "lon": lon, "type": "circle", "size": "large", "contentsize": 17,
                          "color": color, "text": label} for (lon, lat), label, color in pins],
             "geometries": geometries,
@@ -287,7 +318,10 @@ class Geoapify:
                 geography.excluded.append(f"{place.name} · domicilio pendiente de confirmación.")
                 continue
             try:
-                point = await self.geocode(place.name, place.address, place.locality or intent.area,
+                place_area = locality_hint(place.locality, intent.country_code)
+                if place_area.casefold() in {"", "alrededores", "cercanías"}:
+                    place_area = intent.area
+                point = await self.geocode(place.name, place.address, place_area,
                                            intent.country_code, place_index=index)
             except ProviderError:
                 geography.notes.append("El geocodificador dejó de responder. Se conservan las ubicaciones resueltas.")

@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import signal
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -62,7 +63,7 @@ async def discover_id(client: httpx.AsyncClient):
                     return
 
 
-async def run(identify: bool, check: bool):
+async def run(identify: bool, check: bool, webhook: bool = False):
     async with httpx.AsyncClient(timeout=30, follow_redirects=False, limits=httpx.Limits(max_connections=10)) as client:
         if identify:
             await discover_id(client)
@@ -72,15 +73,19 @@ async def run(identify: bool, check: bool):
             result = await Telegram(client, settings.telegram_token).whoami()
             LOG.info("Configuración local cargada. Telegram responde para @%s.", result["username"])
             return
+        secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "") if webhook else ""
+        database_url = os.getenv("DATABASE_URL", "")
+        if webhook and (not re.fullmatch(r"[A-Za-z0-9_-]{24,256}", secret) or not database_url):
+            raise ValueError("El webhook requiere TELEGRAM_WEBHOOK_SECRET y una base DATABASE_URL persistente.")
         with exclusive_instance(settings.data_dir):
-            store = Store(settings.data_dir)
+            store = Store(settings.data_dir, database_url)
             try:
-                await serve(Bot(settings, client, store))
+                await serve(Bot(settings, client, store), secret)
             finally:
                 store.close()
 
 
-async def serve(bot: Bot):
+async def serve(bot: Bot, webhook_secret: str = ""):
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     stopping = False
@@ -90,11 +95,15 @@ async def serve(bot: Bot):
         stopping = True
         task.cancel()
 
-    # Fly sends SIGTERM to the worker when replacing its Machine.
     if os.name != "nt":
         loop.add_signal_handler(signal.SIGTERM, stop)
     try:
-        await bot.run()
+        if webhook_secret:
+            from .webhook import serve_webhook
+
+            await serve_webhook(bot, webhook_secret)
+        else:
+            await bot.run()
     except asyncio.CancelledError:
         if not stopping:
             raise
@@ -109,12 +118,13 @@ def main() -> int:
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--mi-id", action="store_true", help="Recibir tu identificador desde el bot")
     modes.add_argument("--check", action="store_true", help="Validar configuración y autenticación con Telegram")
+    modes.add_argument("--webhook", action="store_true", help="Recibir mensajes mediante un webhook HTTPS")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     try:
-        asyncio.run(run(args.mi_id, args.check))
+        asyncio.run(run(args.mi_id, args.check, args.webhook))
     except KeyboardInterrupt:
         return 0
     except (ValueError, ProviderError) as error:
