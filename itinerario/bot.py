@@ -172,6 +172,7 @@ class Bot:
         info = await self.telegram.whoami()
         self.username = info["username"]
         LOG.info("Conectado como @%s", self.username)
+        LOG.info("telegram_public_access=%s", "enabled" if self.settings.public_access else "disabled")
         try:
             await self.telegram.call("setMyCommands", {
                 "commands": [{"command": command, "description": description} for command, description in MENU.items()]
@@ -186,7 +187,8 @@ class Bot:
             tasks.create_task(self.dispatch())
 
     def accept(self, updates: list[dict], *, polling: bool = True):
-        self.store.enqueue(updates, now(), self.settings.allowed_users, remember_offset=polling)
+        self.store.enqueue(updates, now(), self.settings.allowed_users, public_access=self.settings.public_access,
+                           remember_offset=polling)
         if updates:
             self.wakeup.set()
 
@@ -278,7 +280,7 @@ class Bot:
             self.answer(job, f"Tu identificador de Telegram es {owner}.")
             return True
         admin = owner in self.settings.allowed_users
-        if not admin and not self.store.is_guest(owner):
+        if not self.settings.public_access and not admin and not self.store.is_guest(owner):
             if command == "/start":
                 code = re.fullmatch(r"inv_([A-Za-z0-9_-]{24})", payload)
                 if code and self.store.redeem(owner, code[1], now()):

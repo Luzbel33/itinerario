@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -371,6 +372,27 @@ class BotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(delivery["html"])
         self.assertIn(CITED, delivery["text"])
         self.assertFalse(self.map_calls)
+
+    async def test_public_access_to_private_chats_preserves_report_isolation(self):
+        self.bot.settings = replace(self.settings, public_access=True)
+        self.report_response = intent().model_copy(update={"map_kind": "none"})
+        await self.bot.handle(await self.enqueue(1, "/rapido Buscá opciones."))
+        private_id = self.store.report(OWNER)["id"]
+        self.store.finish(1)
+
+        visitor = OWNER + 1
+        self.bot.accept([update(2, "/start", visitor), update(3, f"/ver {private_id}", visitor)], polling=False)
+        await self.bot.handle(self.store.next_job())
+        self.assertIn("mensaje normal", json.loads(self.store.next_delivery(STAMP)["delivery"])["text"])
+        self.store.finish(2)
+        await self.bot.handle(self.store.next_job())
+        self.assertIn("No encontré", json.loads(self.store.next_delivery(STAMP)["delivery"])["text"])
+        self.store.finish(3)
+
+        self.bot.accept([update(4, "/rapido Buscá opciones para mí.", visitor)], polling=False)
+        await self.bot.handle(self.store.next_job())
+        self.assertIsNotNone(self.store.report(visitor))
+        self.assertIsNone(self.store.report(visitor, private_id))
 
     async def test_explicit_sector_count_overrides_the_size_default(self):
         geo = await self.bot.maps.plan(intent().model_copy(update={"sector_count": 2}), report())

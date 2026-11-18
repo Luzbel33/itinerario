@@ -19,6 +19,7 @@ class Settings:
     retention_days: int
     source_code_url: str
     global_chat_requests: int = 60
+    public_access: bool = False
 
     @classmethod
     def load(cls) -> "Settings":
@@ -41,6 +42,7 @@ class Settings:
             positive_int("REPORTS_PER_DAY", 3), positive_int("GLOBAL_REPORTS_PER_DAY", 12),
             positive_int("RETENTION_DAYS", 30), os.getenv("SOURCE_CODE_URL", ""),
             positive_int("GLOBAL_CHAT_REQUESTS_PER_DAY", 60),
+            os.getenv("TELEGRAM_PUBLIC_ACCESS", "false").strip().casefold() in {"1", "true"},
         )
 
 

@@ -111,7 +111,8 @@ class Store:
             self._execute("INSERT INTO guests VALUES (?) ON CONFLICT(owner) DO NOTHING", (owner,))
         return True
 
-    def enqueue(self, updates: list[dict], now: str, allowed: frozenset[int], *, remember_offset: bool = True):
+    def enqueue(self, updates: list[dict], now: str, allowed: frozenset[int], *,
+                public_access: bool = False, remember_offset: bool = True):
         if not updates:
             return
         with self._transaction():
@@ -123,7 +124,7 @@ class Store:
                     continue
                 command = (message.get("text") or "").split(maxsplit=1)
                 access_command = bool(command and command[0].split("@")[0] in {"/start", "/miid"})
-                if owner not in allowed and not access_command and not self.is_guest(owner):
+                if not public_access and owner not in allowed and not access_command and not self.is_guest(owner):
                     continue
                 self._execute(
                     "INSERT INTO jobs(id, owner, created, payload) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
