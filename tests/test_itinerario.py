@@ -97,7 +97,9 @@ class MapAndEvidenceTests(unittest.TestCase):
         self.assertEqual(result.findings[1].kind, "pendiente")
         result.places[0].address_sources = [99]
         result.places[0].sources = [99]
+        result.limitations.append("PDF: no se generó un archivo adjunto; podés exportar el informe.")
         result = clean_report(result, sources, Depth.QUICK)
+        self.assertEqual(result.limitations, ["Las visitas requieren confirmación."])
         self.assertEqual([place.name for place in result.places], ["Espacio 2", "Espacio 3", "Espacio 4"])
 
 

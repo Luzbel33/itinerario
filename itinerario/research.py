@@ -27,6 +27,13 @@ INSTAGRAM_FIRST = re.compile(
     r"\b(?:prioriz\w*\s+(?:especialmente\s+)?instagram|instagram\s+(?:como\s+)?(?:prioridad|fuente principal))\b",
     re.IGNORECASE,
 )
+DELIVERY_BOILERPLATE = re.compile(
+    r"^\s*(?:(?:pdf|archivo adjunto)\s*[:.]\s*)?"
+    r"(?:no\s+(?:se\s+(?:gener[oó]|cre[oó]|adjunt[oó])|pude\s+(?:generar|crear|adjuntar)|"
+    r"puedo\s+(?:generar|crear|adjuntar))\s+(?:un\s+|el\s+)?(?:pdf|archivo\s+adjunto)"
+    r"|(?:pod[eé]s|puedes)\s+(?:exportar|imprimir)\s+el\s+informe)",
+    re.IGNORECASE,
+)
 
 SYSTEM = """
 Sos Itinerario, un asistente de investigación práctica. Hablale al usuario en su idioma, usando voseo
@@ -116,6 +123,8 @@ Convertí la investigación en un informe accionable. Solamente usá IDs de la l
 El campo evidencia_recuperada contiene resultados de la búsqueda web realizada por Rumbo para este
 pedido. Describí la verificación según lo que dice cada fuente y evitá afirmar que esos resultados los
 aportó la persona. Los límites de cobertura del proveedor se muestran aparte en el informe.
+Tu salida aporta el contenido del informe. El sistema se encarga de producir y entregar el archivo.
+No agregues texto sobre adjuntos, exportación, impresión ni sobre cómo guardar este informe como PDF.
 Toda afirmación factual en findings usa kind=documentado y una fuente específica, o usa pendiente. Usá
 inferencia para el análisis, diferenciándolo del hecho. No hagas pasar dos publicaciones que copian una
 misma fuente por corroboración independiente. Las fechas corresponden al dato; si no se publican, dejá vacío.
@@ -195,6 +204,8 @@ def clean_report(report: Report, sources: Sequence[Source], depth: Depth) -> Rep
         return list(dict.fromkeys(value for value in values if value in valid))
 
     budgets = BUDGETS[depth]
+    report.limitations = [item for item in report.limitations if not DELIVERY_BOILERPLATE.match(item)]
+    report.next_steps = [item for item in report.next_steps if not DELIVERY_BOILERPLATE.match(item)]
     report.findings = report.findings[:budgets.findings]
     for finding in report.findings:
         finding.sources = ids(finding.sources)

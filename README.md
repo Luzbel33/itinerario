@@ -56,6 +56,8 @@ Cargá `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `GEOAPIFY_API_KEY`, `TELEGRAM_ALL
 
 Para mantener el costo en cero, verificá el plan del servicio, usá los créditos disponibles de OpenAI y mantené deshabilitada la recarga automática en esa organización.
 
+Si Render está conectado por URL pública del repositorio, iniciá los despliegues de nuevas versiones desde **Manual Deploy** después de que pase CI. El despliegue automático requiere vincular el proveedor Git. [Operación de despliegues](https://render.com/docs/deploys)
+
 Probá desde Telegram un pedido corto, un informe con mapa por sectores y una repregunta. Reiniciá el worker de prueba y comprobá con `/historial` que el informe siga disponible. Los logs permiten cotejar estos pasos con la entrega del PDF y detectar fallos de Telegram, OpenAI o Geoapify.
 
 Guardá copias mediante la API de backup de SQLite o con el servicio detenido. Una copia del archivo principal mientras el WAL está abierto puede quedar incompleta. Supervisá los rechazos `429`, el espacio de disco y el tiempo de generación. Probá la restauración de informes antes de usar el bot para trabajo importante.
